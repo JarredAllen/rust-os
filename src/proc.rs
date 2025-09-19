@@ -2,6 +2,8 @@ use core::sync::atomic::{AtomicU32, AtomicUsize};
 
 use util::cell::SyncUnsafeCell;
 
+use crate::page_table::PhysicalAddress;
+
 const KERNEL_STACK_SIZE: usize = 4096;
 const MAX_PROCS: usize = 8;
 
@@ -16,6 +18,7 @@ static PROCS_BUF: [SyncUnsafeCell<ProcessInner>; MAX_PROCS] = [const {
         pid: 0,
         state: ProcessState::Unused,
         sp: core::ptr::dangling_mut(),
+        page_table: PhysicalAddress::null(),
         kernel_stack: core::ptr::dangling_mut(),
     })
 }; MAX_PROCS];
@@ -45,6 +48,7 @@ struct ProcessInner {
     pub pid: u32,
     pub state: ProcessState,
     pub sp: *mut (),
+    pub page_table: PhysicalAddress,
     pub kernel_stack: *mut [u8; KERNEL_STACK_SIZE],
 }
 
@@ -64,11 +68,15 @@ impl ProcessInner {
             assert!(pc_ptr.is_aligned(), "Stack misaligned");
             unsafe { pc_ptr.write(pc) };
         }
+        let page_table = core::ptr::NonNull::new(crate::alloc::alloc_pages(1)).unwrap();
+        unsafe { crate::page_table::map_kernel_memory(page_table.cast()) };
         Self {
             // TODO Don't collide with pre-existing processes if it wraps.
             pid: PID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
             state: ProcessState::Runnable,
             sp,
+            // Page table has same physical and virtual address.
+            page_table: PhysicalAddress(page_table.addr().into()),
             kernel_stack,
         }
     }
@@ -102,13 +110,6 @@ pub fn sched_yield() {
     let mut next_proc = Process {
         buf_idx: next_proc_slot,
     };
-    let next_proc_stack_bottom = unsafe { &*PROCS_BUF[next_proc_slot].get() }
-        .kernel_stack
-        .wrapping_add(1)
-        .cast::<()>();
-    unsafe {
-        crate::csr::write_csr!(sscratch = next_proc_stack_bottom);
-    };
     unsafe { switch_context(&mut current_proc, &mut next_proc) }
 }
 
@@ -123,6 +124,13 @@ pub unsafe fn switch_context(old_proc: &mut Process, new_proc: &mut Process) {
         ProcessState::Runnable,
         "New process should be runnable"
     );
+    let next_proc_stack_bottom = new_proc.inner().kernel_stack.wrapping_add(1).cast::<()>();
+    unsafe {
+        crate::csr::write_csr!(sscratch = next_proc_stack_bottom);
+        core::arch::asm!("sfence.vma");
+        crate::csr::set_page_table(new_proc.inner().page_table);
+        core::arch::asm!("sfence.vma");
+    };
     CURRENT_PROC_SLOT.store(new_proc.buf_idx, core::sync::atomic::Ordering::Relaxed);
     let old_sp = &mut old_proc.inner_mut().sp;
     let new_sp = &mut new_proc.inner_mut().sp;

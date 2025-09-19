@@ -3,6 +3,7 @@
 
 mod alloc;
 mod csr;
+mod page_table;
 mod proc;
 mod sbi;
 mod trap;

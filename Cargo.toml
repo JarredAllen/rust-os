@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 util.path = "./util/"
+bitset.path = "./bitset/"
 
 [profile.dev]
 panic = "abort"
@@ -14,4 +15,7 @@ panic = "abort"
 
 
 [workspace]
-members = [".", "./util/", "util"]
+members = [".", "bitset", "util"]
+
+[workspace.dependencies]
+paste = "1.0"

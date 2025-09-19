@@ -1,3 +1,5 @@
+use crate::page_table::PhysicalAddress;
+
 /// Read a CSR and return the value.
 macro_rules! read_csr {
     ($csr:ident) => {
@@ -24,3 +26,9 @@ macro_rules! write_csr {
     };
 }
 pub(crate) use write_csr;
+
+/// Write the satp csr to set the page table.
+pub unsafe fn set_page_table(page_table_addr: PhysicalAddress) {
+    assert!(page_table_addr.is_aligned(crate::page_table::PAGE_SIZE));
+    unsafe { write_csr!(satp = (page_table_addr.0 / crate::page_table::PAGE_SIZE) | (1 << 31)) };
+}
