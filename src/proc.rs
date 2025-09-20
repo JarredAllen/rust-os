@@ -2,10 +2,12 @@ use core::sync::atomic::{AtomicU32, AtomicUsize};
 
 use util::cell::SyncUnsafeCell;
 
-use crate::page_table::PhysicalAddress;
+use crate::page_table::{PageTableFlags, PhysicalAddress};
 
 const KERNEL_STACK_SIZE: usize = 4096;
 const MAX_PROCS: usize = 8;
+
+const USER_BASE: u32 = 0x0100_0000;
 
 static CURRENT_PROC_SLOT: AtomicUsize = AtomicUsize::new(MAX_PROCS);
 
@@ -24,14 +26,14 @@ static PROCS_BUF: [SyncUnsafeCell<ProcessInner>; MAX_PROCS] = [const {
 }; MAX_PROCS];
 
 impl Process {
-    pub fn create_process(pc: u32) -> Self {
+    pub fn create_process(image: &[u8]) -> Self {
         let Some((buf_idx, slot)) = PROCS_BUF.iter().enumerate().find(|(_, slot)| {
             let slot = unsafe { &*slot.get() };
             slot.state == ProcessState::Unused
         }) else {
             panic!("Out of space for processes");
         };
-        unsafe { slot.get().write(ProcessInner::create_process(pc)) };
+        unsafe { slot.get().write(ProcessInner::create_process(image)) };
         Process { buf_idx }
     }
 
@@ -53,7 +55,7 @@ struct ProcessInner {
 }
 
 impl ProcessInner {
-    fn create_process(pc: u32) -> Self {
+    fn create_process(image: &[u8]) -> Self {
         /// Counter for incrementing process IDs.
         static PID_COUNTER: AtomicU32 = AtomicU32::new(1);
 
@@ -66,10 +68,23 @@ impl ProcessInner {
         {
             let pc_ptr = sp.cast::<u32>();
             assert!(pc_ptr.is_aligned(), "Stack misaligned");
-            unsafe { pc_ptr.write(pc) };
+            unsafe { pc_ptr.write(USER_BASE) };
         }
         let page_table = core::ptr::NonNull::new(crate::alloc::alloc_pages(1)).unwrap();
         unsafe { crate::page_table::map_kernel_memory(page_table.cast()) };
+        const USER_PAGE_FLAGS: PageTableFlags = PageTableFlags::VALID
+            .bit_or(PageTableFlags::READABLE)
+            .bit_or(PageTableFlags::WRITABLE)
+            .bit_or(PageTableFlags::EXECUTABLE)
+            .bit_or(PageTableFlags::USER_ACCESSIBLE);
+        unsafe {
+            crate::page_table::alloc_and_map_slice(
+                page_table.cast(),
+                PhysicalAddress(USER_BASE as usize),
+                image,
+                USER_PAGE_FLAGS,
+            )
+        };
         Self {
             // TODO Don't collide with pre-existing processes if it wraps.
             pid: PID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed),

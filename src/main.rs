@@ -37,37 +37,14 @@ fn kernel_main() -> ! {
     // `kernel_trap_entry` is a good function for writing here.
     unsafe { csr::write_csr!(stvec = kernel_trap_entry) }
 
-    fn proc_a_entry() {
-        loop {
-            _ = sbi::putchar('A');
-            proc::sched_yield();
-            delay();
-        }
-    }
-    fn proc_b_entry() {
-        loop {
-            _ = sbi::putchar('B');
-            proc::sched_yield();
-            delay();
-        }
-    }
+    let mut user_proc = proc::Process::create_process(&[]);
 
-    let mut proc_a = proc::Process::create_process(proc_a_entry as fn() as usize as u32);
-    proc::Process::create_process(proc_b_entry as fn() as usize as u32);
-
-    let mut idle_proc = proc::Process::create_process(0);
+    let mut idle_proc = proc::Process::create_process(&[]);
     unsafe {
-        proc::switch_context(&mut idle_proc, &mut proc_a);
+        proc::switch_context(&mut idle_proc, &mut user_proc);
     };
 
     panic!("Reached end of `kernel_main`");
-}
-
-#[inline(never)]
-fn delay() {
-    for _ in 0..300000000 {
-        unsafe { core::arch::asm!("nop") };
-    }
 }
 
 #[unsafe(no_mangle)]

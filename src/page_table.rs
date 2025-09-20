@@ -108,6 +108,36 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) {
     }
 }
 
+/// Allocate new memory to back `data` and map it with the given flags.
+///
+/// # Safety
+/// This writes to the given page table, which must not interfere with rust's understanding of
+/// memory.
+pub unsafe fn alloc_and_map_slice(
+    table: NonNull<PageTable>,
+    start_paddr: PhysicalAddress,
+    data: &[u8],
+    flags: PageTableFlags,
+) {
+    let new_pages = crate::alloc::alloc_pages(data.len().div_ceil(PAGE_SIZE));
+    for (paddr, (vaddr, data)) in (start_paddr.0..).step_by(PAGE_SIZE).zip(
+        (new_pages.addr()..)
+            .step_by(PAGE_SIZE)
+            .zip(data.chunks(PAGE_SIZE)),
+    ) {
+        let page = unsafe { &mut *core::ptr::with_exposed_provenance_mut::<[u8; 4096]>(vaddr) };
+        page[..data.len()].copy_from_slice(data);
+        unsafe {
+            map_page(
+                table,
+                core::ptr::without_provenance_mut(vaddr),
+                PhysicalAddress(paddr),
+                flags,
+            )
+        };
+    }
+}
+
 pub unsafe fn map_page(
     mut table: NonNull<PageTable>,
     vaddr: *mut (),

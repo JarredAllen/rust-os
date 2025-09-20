@@ -15,7 +15,7 @@ panic = "abort"
 
 
 [workspace]
-members = [".", "bitset", "util"]
+members = [".", "bitset", "user/user", "util"]
 
 [workspace.dependencies]
 paste = "1.0"
