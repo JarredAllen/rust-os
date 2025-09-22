@@ -14,6 +14,8 @@ unsafe extern "C" {
     safe static __stack_top: *mut ();
 }
 
+const USER_PROC: &[u8] = include_bytes!("../target/riscv32imac-unknown-none-elf/release/user.bin");
+
 /// The main kernel function.
 ///
 /// This function is called by [`boot`] as soon as we can leave assembly and enter pure Rust code.
@@ -37,7 +39,7 @@ fn kernel_main() -> ! {
     // `kernel_trap_entry` is a good function for writing here.
     unsafe { csr::write_csr!(stvec = kernel_trap_entry) }
 
-    let mut user_proc = proc::Process::create_process(&[]);
+    let mut user_proc = proc::Process::create_process(USER_PROC);
 
     let mut idle_proc = proc::Process::create_process(&[]);
     unsafe {

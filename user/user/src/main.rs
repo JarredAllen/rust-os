@@ -5,6 +5,7 @@ unsafe extern "C" {
     safe static __stack_top: *mut ();
 }
 
+#[unsafe(link_section = ".text")]
 #[unsafe(no_mangle)]
 fn main() {
     loop {
