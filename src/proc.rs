@@ -66,9 +66,9 @@ impl ProcessInner {
             .wrapping_byte_sub(52)
             .cast::<()>();
         {
-            let pc_ptr = sp.cast::<u32>();
+            let pc_ptr = sp.cast::<usize>();
             assert!(pc_ptr.is_aligned(), "Stack misaligned");
-            unsafe { pc_ptr.write(USER_BASE) };
+            unsafe { pc_ptr.write(user_entry as usize) };
         }
         let page_table = core::ptr::NonNull::new(crate::alloc::alloc_pages(1)).unwrap();
         unsafe { crate::page_table::map_kernel_memory(page_table.cast()) };
@@ -194,4 +194,19 @@ unsafe extern "C" fn switch_context_inner(old_sp: &mut *mut (), new_sp: &mut *mu
         "addi sp, sp, 13 * 4", // We've popped 13 4-byte registers from the stack
         "ret",
     )
+}
+
+#[unsafe(naked)]
+unsafe extern "C" fn user_entry() {
+    core::arch::naked_asm!(
+        "lui t0, %hi({sepc})",
+        "addi t0, t0, %lo({sepc})",
+        "csrw sepc, t0",
+        "lui t0, %hi({sstatus})",
+        "addi t0, t0, %lo({sstatus})",
+        "csrw sstatus, t0",
+        "sret",
+        sepc = const USER_BASE,
+        sstatus =  const 1 << 5,
+    );
 }

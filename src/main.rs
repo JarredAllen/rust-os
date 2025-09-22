@@ -14,7 +14,7 @@ unsafe extern "C" {
     safe static __stack_top: *mut ();
 }
 
-const USER_PROC: &[u8] = include_bytes!("../target/riscv32imac-unknown-none-elf/release/user.bin");
+const USER_PROC: &[u8] = include_bytes!("../target/riscv32imac-unknown-none-elf/release/shell.bin");
 
 /// The main kernel function.
 ///

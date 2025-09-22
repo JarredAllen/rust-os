@@ -38,16 +38,16 @@ impl PageTableEntry {
 
     const EMPTY: Self = Self(0);
 
-    fn from_addr_flags(addr: *mut (), flags: PageTableFlags) -> Self {
+    fn from_addr_flags(addr: PhysicalAddress, flags: PageTableFlags) -> Self {
         Self(
-            ((addr.addr() / PAGE_SIZE) << Self::ADDR_SHIFT) & Self::ADDR_MASK
+            ((addr.0 / PAGE_SIZE) << Self::ADDR_SHIFT) & Self::ADDR_MASK
                 | usize::from(flags) & Self::FLAGS_MASK,
         )
     }
 
-    fn addr(self) -> *mut () {
+    fn physical_addr(self) -> PhysicalAddress {
         let page_num = (self.0 & Self::ADDR_MASK) >> Self::ADDR_SHIFT;
-        core::ptr::with_exposed_provenance_mut(page_num * PAGE_SIZE)
+        PhysicalAddress(page_num * PAGE_SIZE)
     }
 
     fn flags(self) -> PageTableFlags {
@@ -115,18 +115,16 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) {
 /// memory.
 pub unsafe fn alloc_and_map_slice(
     table: NonNull<PageTable>,
-    start_paddr: PhysicalAddress,
+    start_vaddr: PhysicalAddress,
     data: &[u8],
     flags: PageTableFlags,
 ) {
     let new_pages = crate::alloc::alloc_pages(data.len().div_ceil(PAGE_SIZE));
-    for (paddr, (vaddr, data)) in (start_paddr.0..).step_by(PAGE_SIZE).zip(
-        (new_pages.addr()..)
+    for (paddr, (vaddr, data)) in (new_pages.addr()..).step_by(PAGE_SIZE).zip(
+        (start_vaddr.0..)
             .step_by(PAGE_SIZE)
             .zip(data.chunks(PAGE_SIZE)),
     ) {
-        let page = unsafe { &mut *core::ptr::with_exposed_provenance_mut::<[u8; 4096]>(vaddr) };
-        page[..data.len()].copy_from_slice(data);
         unsafe {
             map_page(
                 table,
@@ -135,6 +133,9 @@ pub unsafe fn alloc_and_map_slice(
                 flags,
             )
         };
+        // Write to `paddr` because it's also the address in kernel memory.
+        let page = unsafe { &mut *core::ptr::with_exposed_provenance_mut::<[u8; 4096]>(paddr) };
+        page[..data.len()].copy_from_slice(data);
     }
 }
 
@@ -160,15 +161,22 @@ pub unsafe fn map_page(
     let table = unsafe { table.as_mut() };
     if !table.entries[vpn1].flags().valid() {
         let new_page = crate::alloc::alloc_pages(1);
-        table.entries[vpn1] = PageTableEntry::from_addr_flags(new_page, PageTableFlags::VALID);
+        table.entries[vpn1] = PageTableEntry::from_addr_flags(
+            PhysicalAddress(new_page.addr()),
+            PageTableFlags::VALID,
+        );
         unsafe {
             new_page.cast::<PageTable>().write(PageTable {
                 entries: [PageTableEntry::EMPTY; PAGE_TABLE_LEGNTH],
             })
         };
     }
-    let table0 = unsafe { &mut *table.entries[vpn1].addr().cast::<PageTable>() };
+    let table0 = unsafe {
+        &mut *core::ptr::with_exposed_provenance_mut::<PageTable>(
+            table.entries[vpn1].physical_addr().0,
+        )
+    };
 
     let vpn0 = (vaddr.addr() >> 12) & 0x3ff;
-    table0.entries[vpn0] = PageTableEntry::from_addr_flags(vaddr, flags | PageTableFlags::VALID);
+    table0.entries[vpn0] = PageTableEntry::from_addr_flags(paddr, flags | PageTableFlags::VALID);
 }
