@@ -47,6 +47,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// This enum is non-exhaustive
 #[repr(i32)]
 #[non_exhaustive]
+#[derive(Debug)]
 pub enum Error {
     Failed = -1,
     NotSupported = -2,

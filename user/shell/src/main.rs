@@ -7,7 +7,7 @@ unsafe extern "C" {
 
 #[unsafe(no_mangle)]
 fn main() {
-    let mut line_buf = &mut [0; 128];
+    let line_buf = &mut [0; 128];
     let mut line_buf_len = 0;
     userlib::putstr("> ");
     loop {
@@ -26,6 +26,7 @@ fn main() {
                 }
 
                 line_buf_len = 0;
+                userlib::putstr("> ");
             }
             c => {
                 userlib::putchar(c);

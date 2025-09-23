@@ -128,6 +128,11 @@ pub fn sched_yield() {
     unsafe { switch_context(&mut current_proc, &mut next_proc) }
 }
 
+/// Get the PID of the currently-active process.
+pub fn current_pid() -> u32 {
+    unsafe { &*PROCS_BUF[CURRENT_PROC_SLOT.load(core::sync::atomic::Ordering::Relaxed)].get() }.pid
+}
+
 /// Do a context switch.
 ///
 /// # Safety

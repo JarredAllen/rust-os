@@ -16,6 +16,14 @@ pub fn getchar() -> char {
     unsafe { char::from_u32_unchecked(ret) }
 }
 
+pub fn get_pid() -> u32 {
+    unsafe { syscall(shared::Syscall::GetPid as u32, [0; 3]) }
+}
+
+pub fn sched_yield() {
+    unsafe { syscall(shared::Syscall::SchedYield as u32, [0; 3]) };
+}
+
 /// Perform an arbitrary syscall.
 ///
 /// # Safety
