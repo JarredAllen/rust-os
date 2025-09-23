@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 util.path = "./util/"
 bitset.path = "./bitset/"
+shared = { version = "0.1.0", path = "shared" }
 
 [profile.dev]
 panic = "abort"
@@ -15,7 +16,7 @@ panic = "abort"
 
 
 [workspace]
-members = [".", "bitset", "user/shell", "util"]
+members = [".", "bitset", "shared", "user/lib", "user/shell", "util"]
 
 [workspace.dependencies]
 paste = "1.0"

@@ -7,8 +7,32 @@ unsafe extern "C" {
 
 #[unsafe(no_mangle)]
 fn main() {
+    let mut line_buf = &mut [0; 128];
+    let mut line_buf_len = 0;
+    userlib::putstr("> ");
     loop {
-        core::hint::spin_loop();
+        match userlib::getchar() {
+            '\r' | '\n' => {
+                let cmd = str::from_utf8(&line_buf[..line_buf_len]).expect("Invalid utf-8");
+                userlib::putchar('\n');
+
+                match cmd {
+                    "hello" => userlib::putstr("Hello from user shell!\n"),
+                    _ => {
+                        userlib::putstr("Unrecognized command: ");
+                        userlib::putstr(cmd);
+                        userlib::putstr("\n");
+                    }
+                }
+
+                line_buf_len = 0;
+            }
+            c => {
+                userlib::putchar(c);
+                line_buf[line_buf_len] = c as u8;
+                line_buf_len += 1;
+            }
+        }
     }
 }
 

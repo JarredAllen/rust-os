@@ -6,6 +6,7 @@ mod csr;
 mod page_table;
 mod proc;
 mod sbi;
+mod syscall;
 mod trap;
 
 unsafe extern "C" {
@@ -50,11 +51,23 @@ fn kernel_main() -> ! {
 }
 
 #[unsafe(no_mangle)]
-fn handle_trap(_frame: &trap::TrapFrame) {
+fn handle_trap(frame: &mut trap::TrapFrame) {
+    const SCAUSE_ECALL: u32 = 8;
+
     let scause = csr::read_csr!(scause);
     let stval = csr::read_csr!(stval);
-    let user_pc = csr::read_csr!(sepc);
-    panic!("Unexpected trap scause={scause:X}, stval={stval:X}, user_pc={user_pc:X}, ");
+    let mut user_pc = csr::read_csr!(sepc);
+
+    match scause {
+        SCAUSE_ECALL => {
+            syscall::handle_syscall(frame);
+            user_pc += 4;
+        }
+        _ => {
+            panic!("Unexpected trap scause={scause:X}, stval={stval:X}, user_pc={user_pc:X}, ");
+        }
+    }
+    unsafe { csr::write_csr!(sepc = user_pc) };
 }
 
 /// Entry point for kernel traps.

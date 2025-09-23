@@ -29,6 +29,11 @@ pub fn putchar(c: char) -> Result<()> {
     Ok(())
 }
 
+pub fn getchar() -> Result<Option<core::num::NonZero<char>>> {
+    let c = call([0; 6], 0, 2)?;
+    Ok(char::from_u32(c).and_then(|c| core::num::NonZero::new(c)))
+}
+
 /// A type alias for returning errors more easily.
 pub type Result<T> = core::result::Result<T, Error>;
 

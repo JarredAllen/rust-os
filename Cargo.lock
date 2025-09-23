@@ -20,12 +20,27 @@ name = "rust-os"
 version = "0.1.0"
 dependencies = [
  "bitset",
+ "shared",
  "util",
 ]
 
 [[package]]
+name = "shared"
+version = "0.1.0"
+
+[[package]]
 name = "shell"
 version = "0.1.0"
+dependencies = [
+ "userlib",
+]
+
+[[package]]
+name = "userlib"
+version = "0.1.0"
+dependencies = [
+ "shared",
+]
 
 [[package]]
 name = "util"
