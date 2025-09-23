@@ -11,7 +11,10 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
         GET_CHAR_NUM => {
             loop {
                 match crate::sbi::getchar() {
-                    Ok(Some(c)) => frame.a0 = c.get() as u32,
+                    Ok(Some(c)) => {
+                        frame.a0 = c.get() as u32;
+                        break;
+                    }
                     Ok(None) => {}
                     Err(_e) => {
                         // TODO log the error
