@@ -24,6 +24,11 @@ pub fn sched_yield() {
     unsafe { syscall(shared::Syscall::SchedYield as u32, [0; 3]) };
 }
 
+pub fn exit(status: i32) -> ! {
+    unsafe { syscall(shared::Syscall::Exit as u32, [status as u32, 0, 0]) };
+    unreachable!("exit syscall should never return")
+}
+
 /// Perform an arbitrary syscall.
 ///
 /// # Safety

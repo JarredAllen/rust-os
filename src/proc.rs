@@ -37,6 +37,11 @@ impl Process {
         Process { buf_idx }
     }
 
+    /// Mark this process as the idle process, to only be chosen if nothing else is available.
+    pub(crate) fn set_idle(&mut self) {
+        self.inner_mut().state = ProcessState::Idle;
+    }
+
     fn inner(&self) -> &ProcessInner {
         unsafe { &*PROCS_BUF[self.buf_idx].get() }
     }
@@ -46,7 +51,7 @@ impl Process {
     }
 }
 
-struct ProcessInner {
+pub(crate) struct ProcessInner {
     pub pid: u32,
     pub state: ProcessState,
     pub sp: *mut (),
@@ -103,13 +108,14 @@ unsafe impl Sync for ProcessInner {}
 pub enum ProcessState {
     Unused,
     Runnable,
+    Idle,
+    Exited,
 }
 
-pub fn sched_yield() {
-    let mut current_proc = Process {
-        buf_idx: CURRENT_PROC_SLOT.load(core::sync::atomic::Ordering::Relaxed),
-    };
-    let Some((next_proc_slot, _)) = PROCS_BUF.iter().enumerate().find(|&(slot, proc)| {
+/// Select the next process to run.
+fn next_proc_to_run(current_proc: &Process) -> usize {
+    // Look for a runnable process other than the current one.
+    if let Some((next_proc_slot, _)) = PROCS_BUF.iter().enumerate().find(|&(slot, proc)| {
         if slot == current_proc.buf_idx {
             return false;
         }
@@ -117,20 +123,51 @@ pub fn sched_yield() {
         if proc.state != ProcessState::Runnable {
             return false;
         }
-        // TODO Do we need more checks?
         true
-    }) else {
-        todo!("Nothing runnable right now");
+    }) {
+        return next_proc_slot;
+    }
+    if current_proc.inner().state == ProcessState::Runnable {
+        return current_proc.buf_idx;
+    }
+    // If no processes are runnable, run the idle process.
+    //
+    // TODO We should cache this result, since it won't change.
+    if let Some((next_proc_slot, _)) = PROCS_BUF.iter().enumerate().find(|&(_, proc)| {
+        let proc = unsafe { &*proc.get() };
+        proc.state == ProcessState::Idle
+    }) {
+        return next_proc_slot;
     };
-    let mut next_proc = Process {
-        buf_idx: next_proc_slot,
+    todo!("Nothing runnable right now");
+}
+
+pub fn sched_yield() {
+    let mut current_proc = Process {
+        buf_idx: CURRENT_PROC_SLOT.load(core::sync::atomic::Ordering::Relaxed),
     };
-    unsafe { switch_context(&mut current_proc, &mut next_proc) }
+    let next_slot_idx = next_proc_to_run(&current_proc);
+    if next_slot_idx != current_proc.buf_idx {
+        let mut next_proc = Process {
+            buf_idx: next_slot_idx,
+        };
+        unsafe { switch_context(&mut current_proc, &mut next_proc) }
+    }
 }
 
 /// Get the PID of the currently-active process.
 pub fn current_pid() -> u32 {
-    unsafe { &*PROCS_BUF[CURRENT_PROC_SLOT.load(core::sync::atomic::Ordering::Relaxed)].get() }.pid
+    unsafe { current_proc() }.pid
+}
+
+/// Get a reference to the current process.
+///
+/// # Safety
+/// This reference is only valid until some other function references this slot.
+///
+/// TODO Support thread-safety in multithreading.
+pub(crate) unsafe fn current_proc<'a>() -> &'a mut ProcessInner {
+    unsafe { &mut *PROCS_BUF[CURRENT_PROC_SLOT.load(core::sync::atomic::Ordering::Relaxed)].get() }
 }
 
 /// Do a context switch.

@@ -18,6 +18,7 @@ fn main() {
 
                 match cmd {
                     "hello" => userlib::putstr("Hello from user shell!\n"),
+                    "exit" => userlib::exit(0),
                     _ => {
                         userlib::putstr("Unrecognized command: ");
                         userlib::putstr(cmd);

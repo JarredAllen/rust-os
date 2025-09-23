@@ -43,11 +43,17 @@ fn kernel_main() -> ! {
     let mut user_proc = proc::Process::create_process(USER_PROC);
 
     let mut idle_proc = proc::Process::create_process(&[]);
+    idle_proc.set_idle();
+
     unsafe {
         proc::switch_context(&mut idle_proc, &mut user_proc);
     };
 
-    panic!("Reached end of `kernel_main`");
+    loop {
+        _ = println!("Reached idle loop");
+        unsafe { core::arch::asm!("wfi", options(nomem, preserves_flags, nostack)) };
+        proc::sched_yield();
+    }
 }
 
 #[unsafe(no_mangle)]

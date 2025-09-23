@@ -6,4 +6,5 @@ pub enum Syscall {
     GetChar = 2,
     GetPid = 3,
     SchedYield = 4,
+    Exit = 5,
 }
