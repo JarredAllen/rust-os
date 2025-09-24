@@ -26,7 +26,7 @@ pub fn alloc_pages(num_pages: usize) -> *mut () {
 
     loop {
         let head = NEXT_PTR.load(Ordering::Relaxed);
-        _ = crate::println!("Trying to allocate {num_pages} pages at {:X}", head.addr());
+        log::debug!("Trying to allocate {num_pages} pages at {:X}", head.addr());
         let new_next =
             head.wrapping_byte_add(PAGE_SIZE.checked_mul(num_pages).expect("alloc too big"));
         assert!(
@@ -73,7 +73,6 @@ impl<T, F> LazyLock<T, F> {
             let init_func = unsafe { self.init_func.get().read() };
             let value =
                 unsafe { &mut *self.value.get() }.write(unsafe { init_func.assume_init() }());
-            _ = crate::println!("Initialized {value:?}");
             self.finished.store(true, Ordering::Release);
             value
         }

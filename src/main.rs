@@ -3,6 +3,7 @@
 
 mod alloc;
 mod csr;
+mod logger;
 mod page_table;
 mod proc;
 mod sbi;
@@ -34,11 +35,12 @@ fn kernel_main() -> ! {
     };
     bss.fill(0);
 
-    _ = println!("Hello, world!");
-
     // SAFETY:
     // `kernel_trap_entry` is a good function for writing here.
     unsafe { csr::write_csr!(stvec = kernel_trap_entry) }
+
+    // Keep only logs at `Info` level or above.
+    logger::init_logger(log::LevelFilter::Info);
 
     let mut user_proc = proc::Process::create_process(USER_PROC);
 
@@ -50,7 +52,7 @@ fn kernel_main() -> ! {
     };
 
     loop {
-        _ = println!("Reached idle loop");
+        log::info!("Reached idle loop");
         unsafe { core::arch::asm!("wfi", options(nomem, preserves_flags, nostack)) };
         proc::sched_yield();
     }
@@ -157,29 +159,6 @@ extern "C" fn kernel_trap_entry() -> ! {
     );
 }
 
-/// A [`core::fmt::Write`] implementation for the SBI writing interface.
-pub struct SbiPutcharWriter;
-impl core::fmt::Write for SbiPutcharWriter {
-    fn write_char(&mut self, c: char) -> core::fmt::Result {
-        sbi::putchar(c).map_err(|_| core::fmt::Error)
-    }
-
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for c in s.chars() {
-            self.write_char(c)?;
-        }
-        Ok(())
-    }
-}
-macro_rules! println {
-    ($($args:tt)*) => {{
-        use core::fmt::Write;
-        core::writeln!($crate::SbiPutcharWriter, $($args)*)
-    }};
-}
-
-use println;
-
 /// The entry function.
 ///
 /// This function does some minimal setup in assembly before calling [`kernel_main`].
@@ -198,12 +177,14 @@ extern "C" fn boot() -> ! {
     );
 }
 
-#[cfg(target_os = "none")]
-#[panic_handler]
+#[cfg_attr(target_os = "none", panic_handler)]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    _ = println!();
-    _ = println!("===== KERNEL PANIC! =====");
-    _ = println!("{info}");
+    use core::fmt::Write as _;
+
+    _ = writeln!(sbi::SbiPutcharWriter);
+    _ = writeln!(sbi::SbiPutcharWriter, "===== KERNEL PANIC! =====");
+    _ = writeln!(sbi::SbiPutcharWriter, "{info}");
+
     loop {
         core::hint::spin_loop();
     }

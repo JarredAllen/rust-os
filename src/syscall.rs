@@ -35,7 +35,7 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
         EXIT_NUM => {
             let _exit_status = frame.a1 as i32; // TODO record this status somewhere.
             let current_proc = unsafe { crate::proc::current_proc() };
-            _ = crate::println!("Process {} exited", current_proc.pid);
+            log::info!("Process {} exited", current_proc.pid);
             current_proc.state = crate::proc::ProcessState::Exited;
             crate::proc::sched_yield();
         }

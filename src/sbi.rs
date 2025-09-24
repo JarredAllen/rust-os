@@ -39,6 +39,21 @@ pub fn getchar() -> Result<Option<core::num::NonZero<char>>> {
     Ok(char::from_u32(c).and_then(core::num::NonZero::new))
 }
 
+/// A [`core::fmt::Write`] implementation for the SBI writing interface.
+pub struct SbiPutcharWriter;
+impl core::fmt::Write for SbiPutcharWriter {
+    fn write_char(&mut self, c: char) -> core::fmt::Result {
+        crate::sbi::putchar(c).map_err(|_| core::fmt::Error)
+    }
+
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for c in s.chars() {
+            self.write_char(c)?;
+        }
+        Ok(())
+    }
+}
+
 /// A type alias for returning errors more easily.
 pub type Result<T> = core::result::Result<T, Error>;
 
