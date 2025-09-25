@@ -6,8 +6,7 @@ macro_rules! bitset {
         $pub:vis $name:ident($repr:ty) {
             $(
                 // TODO Allow doc comments here
-                $bit:ident $( = $disc:expr
-            )? ),*
+                $bit:ident $( = $disc:expr)? ),*
             $(,)?
         }
     ) => {$crate::__macro_export::paste! {
@@ -26,7 +25,7 @@ macro_rules! bitset {
                     pub const fn empty() -> Self { Self(0) }
 
                     /// Make a value with every bit set.
-                    pub const fn all() -> Self { Self($( Self::[< $bit:snake:upper >].0 )|*) }
+                    pub const fn all() -> Self { Self(const { $( Self::[< $bit:snake:upper >].0 |)* 0 }) }
 
                     /// The raw bits set in [`Self::all`].
                     const MASK: $repr = Self::all().0;
@@ -91,12 +90,37 @@ macro_rules! bitset {
                     }
                 }
 
+                /// Default to an empty set of values.
+                impl ::core::default::Default for $name {
+                    fn default() -> Self {
+                        Self::empty()
+                    }
+                }
+
+                impl $crate::BitSet for $name {
+                    type Repr = $repr;
+
+                    fn as_inner(&self) -> &Self::Repr { &self.0 }
+                    fn as_inner_mut(&mut self) -> &mut Self::Repr { &mut self.0 }
+                }
+
                 /// Use an enum to generate offsets if not provided.
                 enum Offsets {
                     $( $bit $( = $disc )? ),*
                 }
             };
         }};
+}
+
+/// A trait for types from [`bitset!`].
+///
+/// TODO All functionality should be duplicated between the trait (allowing for generic code) and
+/// inherent methods (so you don't have to import the trait).
+pub trait BitSet: From<Self::Repr> + Into<Self::Repr> {
+    type Repr;
+
+    fn as_inner(&self) -> &Self::Repr;
+    fn as_inner_mut(&mut self) -> &mut Self::Repr;
 }
 
 #[doc(hidden)]
