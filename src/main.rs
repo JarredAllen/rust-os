@@ -3,12 +3,14 @@
 
 mod alloc;
 mod csr;
+mod error;
 mod logger;
 mod page_table;
 mod proc;
 mod sbi;
 mod syscall;
 mod trap;
+mod virtio_block;
 
 unsafe extern "C" {
     safe static __bss: *mut ();
@@ -41,6 +43,26 @@ fn kernel_main() -> ! {
 
     // Keep only logs at `Info` level or above.
     logger::init_logger(log::LevelFilter::Info);
+
+    let mut storage = unsafe { virtio_block::VirtioBlock::init_kernel_address() };
+    {
+        let mut buf = [0; virtio_block::SECTOR_LEN];
+        storage
+            .read_sector(&mut buf, 0)
+            .expect("Failed to read buffer");
+        let message = str::from_utf8(&buf).expect("Read wasn't utf-8");
+        log::info!("First disk sector: {message:?}");
+        buf[..14].copy_from_slice(b"hello, world! ");
+        storage
+            .write_sector(&buf, 0)
+            .expect("Failed to write to buffer");
+        buf.fill(0);
+        storage
+            .read_sector(&mut buf, 0)
+            .expect("Failed to read buffer");
+        let message = str::from_utf8(&buf).expect("Read wasn't utf-8");
+        log::info!("First disk sector (after write): {message:?}");
+    }
 
     let mut user_proc = proc::Process::create_process(USER_PROC);
 

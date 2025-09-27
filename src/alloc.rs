@@ -19,6 +19,13 @@ unsafe extern "C" {
 /// The size of a single page in memory.
 const PAGE_SIZE: usize = 4096;
 
+/// Allocate some pages, and erase the memory.
+pub fn alloc_pages_zeroed(num_pages: usize) -> *mut () {
+    let ptr = alloc_pages(num_pages);
+    unsafe { ptr.write_bytes(0, num_pages * crate::page_table::PAGE_SIZE) };
+    ptr
+}
+
 /// Allocate some pages.
 pub fn alloc_pages(num_pages: usize) -> *mut () {
     static NEXT_PTR: LazyLock<AtomicPtr<()>> =

@@ -48,6 +48,11 @@ macro_rules! bitset {
                             self.contains(Self::[< $bit:snake:upper >])
                         }
                     )*
+
+                    /// Get whether this set is empty.
+                    pub const fn is_empty(&self) -> bool {
+                        self.0 == 0
+                    }
                 }
                 /// Combine the bits from each.
                 ///
@@ -94,6 +99,18 @@ macro_rules! bitset {
                 impl ::core::default::Default for $name {
                     fn default() -> Self {
                         Self::empty()
+                    }
+                }
+
+                impl ::core::fmt::Display for $name {
+                    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        f.write_str(::core::concat!(::core::stringify!($name), " { "))?;
+                        $(
+                            if self.[< $bit:snake:lower >]() {
+                                f.write_str(::core::concat!(::core::stringify!($bit), " "))?;
+                            }
+                        )*
+                        f.write_str("}")
                     }
                 }
 

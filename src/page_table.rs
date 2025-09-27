@@ -60,7 +60,8 @@ pub struct PageTable {
     entries: [PageTableEntry; PAGE_TABLE_LEGNTH],
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[repr(transparent)]
 pub struct PhysicalAddress(pub usize);
 impl PhysicalAddress {
     /// Check whether `self` is aligned to a given alignment.
@@ -106,6 +107,15 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) {
             )
         };
     }
+    // Map the virtio block device
+    unsafe {
+        map_page(
+            table,
+            core::ptr::with_exposed_provenance_mut(crate::virtio_block::DEVICE_ADDRESS),
+            PhysicalAddress(crate::virtio_block::DEVICE_ADDRESS),
+            KERNEL_MEM_FLAGS,
+        )
+    };
 }
 
 /// Allocate new memory to back `data` and map it with the given flags.
