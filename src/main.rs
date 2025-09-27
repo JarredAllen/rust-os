@@ -10,7 +10,7 @@ mod proc;
 mod sbi;
 mod syscall;
 mod trap;
-mod virtio_block;
+mod virtio;
 
 unsafe extern "C" {
     safe static __bss: *mut ();
@@ -44,9 +44,9 @@ fn kernel_main() -> ! {
     // Keep only logs at `Info` level or above.
     logger::init_logger(log::LevelFilter::Info);
 
-    let mut storage = unsafe { virtio_block::VirtioBlock::init_kernel_address() };
+    let mut storage = unsafe { virtio::VirtioBlock::init_kernel_address() };
     {
-        let mut buf = [0; virtio_block::SECTOR_LEN];
+        let mut buf = [0; virtio::BLOCK_SECTOR_LEN];
         storage
             .read_sector(&mut buf, 0)
             .expect("Failed to read buffer");

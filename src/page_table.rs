@@ -111,8 +111,8 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) {
     unsafe {
         map_page(
             table,
-            core::ptr::with_exposed_provenance_mut(crate::virtio_block::DEVICE_ADDRESS),
-            PhysicalAddress(crate::virtio_block::DEVICE_ADDRESS),
+            core::ptr::with_exposed_provenance_mut(crate::virtio::BLOCK_DEVICE_ADDRESS),
+            PhysicalAddress(crate::virtio::BLOCK_DEVICE_ADDRESS),
             KERNEL_MEM_FLAGS,
         )
     };

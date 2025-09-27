@@ -9,24 +9,14 @@ use core::marker::PhantomData;
 
 use crate::error::{ErrorKind, Result};
 
-pub(crate) const DEVICE_ADDRESS: usize = 0x1000_1000;
+/// The address for the block device.
+pub(crate) const BLOCK_DEVICE_ADDRESS: usize = 0x1000_1000;
 
 /// A driver controlling a virtio block device.
 pub struct VirtioBlock<'a> {
-    /// A pointer to the registers for the device.
-    ///
-    /// This isn't a reference because the underlying hardware can modify the pointed-to data, so
-    /// the aliasing rules for exclusive references are violated.
-    regs: *mut (),
-    /// A pointer to the queue buffer.
-    ///
-    /// This isn't a reference because the underlying hardware can modify the pointed-to data, so
-    /// the aliasing rules for exclusive references are violated.
-    queue: *mut VirtQueue,
-    /// Phantom to track the lifetime.
-    phantom: PhantomData<&'a mut ()>,
+    /// The underlying virtio implementation.
+    virtio: Virtio<'a>,
 }
-
 impl<'a> VirtioBlock<'a> {
     /// Initialize at the address the device appears at in kernel memory.
     ///
@@ -39,8 +29,128 @@ impl<'a> VirtioBlock<'a> {
         )
         .cast();
         log::info!("Queue address: 0x{:X}", queue.addr());
+        let virtio = unsafe {
+            Virtio::init_for_pointers(
+                core::ptr::with_exposed_provenance_mut(BLOCK_DEVICE_ADDRESS),
+                queue,
+            )
+        };
+        assert_eq!(virtio.read_register(reg::DeviceId), 2);
+        Self { virtio }
+    }
+
+    /// Send the request to the disk and wait for a response.
+    fn do_request(&mut self, request: &mut BlockRequest) {
+        // Each descriptor can only be read-only or write-only, so we need to split into multiple
+        // parts.
+        let desc = self
+            .virtio
+            .queue
+            .wrapping_byte_add(core::mem::offset_of!(VirtQueue, descriptor))
+            .cast::<VirtQueueDescriptor>();
+        // Descriptor 0: Device-read-only header
+        unsafe {
+            desc.write_volatile(VirtQueueDescriptor {
+                address: core::ptr::from_mut(request).addr() as u64,
+                length: core::mem::offset_of!(BlockRequest, data) as u32,
+                flags: DescriptorFlags::NEXT,
+                next: 1,
+            })
+        };
+        // Descriptor 1: The data (may be read or written)
+        unsafe {
+            desc.wrapping_add(1).write_volatile(VirtQueueDescriptor {
+                address: core::ptr::from_mut(request).addr() as u64
+                    + core::mem::offset_of!(BlockRequest, data) as u64,
+                length: BLOCK_SECTOR_LEN as u32,
+                flags: match request.ty {
+                    BlockRequestType::Read => DescriptorFlags::NEXT | DescriptorFlags::WRITE,
+                    BlockRequestType::Write => DescriptorFlags::NEXT,
+                    _ => {
+                        // We (the driver) don't yet support the other types.
+                        request.status = BlockRequestStatus::UNSUPPORTED;
+                        return;
+                    }
+                },
+                next: 2,
+            })
+        };
+        // Descriptor 2: The status byte (device-written)
+        unsafe {
+            desc.wrapping_add(2).write_volatile(VirtQueueDescriptor {
+                address: core::ptr::from_mut(request).addr() as u64
+                    + core::mem::offset_of!(BlockRequest, status) as u64,
+                length: 1,
+                flags: DescriptorFlags::WRITE,
+
+                next: 0,
+            })
+        };
+
+        // SAFETY:
+        // The descriptors point to non-overlapping sections of `request`, which we have an
+        // exclusive reference to.
+        unsafe { self.virtio.run_descriptor(0) };
+    }
+
+    /// Read a sector from the device into the buffer.
+    pub fn read_sector(&mut self, buf: &mut [u8; BLOCK_SECTOR_LEN], sector: u64) -> Result<()> {
+        log::info!("Reading sector {sector} from virtio block device");
+        let mut request = BlockRequest {
+            ty: BlockRequestType::Read,
+            reserved: 0,
+            sector,
+            data: [0; 512],
+            status: BlockRequestStatus::empty(),
+        };
+        self.do_request(&mut request);
+        request.status.success()?;
+        buf.copy_from_slice(&request.data);
+        Ok(())
+    }
+
+    /// Write a sector to the buffer.
+    pub fn write_sector(&mut self, data: &[u8; BLOCK_SECTOR_LEN], sector: u64) -> Result<()> {
+        log::info!("Writing sector {sector} to virtio block device");
+        let mut request = BlockRequest {
+            ty: BlockRequestType::Write,
+            reserved: 0,
+            sector,
+            data: *data,
+            status: BlockRequestStatus::empty(),
+        };
+        self.do_request(&mut request);
+        request.status.success()?;
+        Ok(())
+    }
+}
+
+/// A driver controlling a virtio device.
+///
+/// This type handles the code common to all virtio device types. Device-specific logic should be
+/// implemented on the publicly-exported types
+struct Virtio<'a> {
+    /// A pointer to the registers for the device.
+    ///
+    /// This isn't a reference because the underlying hardware can modify the pointed-to data, so
+    /// the aliasing rules for exclusive references are violated.
+    regs: *mut (),
+    /// A pointer to the queue buffer.
+    ///
+    /// This isn't a reference because the underlying hardware can modify the pointed-to data, so
+    /// the aliasing rules for exclusive references are violated.
+    ///
+    /// The driver presently only supports having exactly one queue. TODO Add support for
+    /// initializing and destroying queues.
+    queue: *mut VirtQueue,
+    /// Phantom to track the lifetime.
+    phantom: PhantomData<&'a mut ()>,
+}
+
+impl<'a> Virtio<'a> {
+    unsafe fn init_for_pointers(regs: *mut (), queue: *mut VirtQueue) -> Self {
         let mut this = Self {
-            regs: core::ptr::with_exposed_provenance_mut(DEVICE_ADDRESS),
+            regs,
             queue,
             phantom: PhantomData,
         };
@@ -89,7 +199,6 @@ impl<'a> VirtioBlock<'a> {
         // First check that the device is what we expect.
         assert_eq!(self.read_register(reg::Magic), 0x74726976);
         assert_eq!(self.read_register(reg::Version), 1);
-        assert_eq!(self.read_register(reg::DeviceId), 2);
 
         // Then read the features, check that we support them, and write them back.
         let features = self.read_register(reg::DeviceFeatures);
@@ -124,26 +233,7 @@ impl<'a> VirtioBlock<'a> {
         );
         unsafe { self.queue.write_volatile(VirtQueue::default()) };
 
-        self.write_register(
-            reg::QueuePfn,
-            self.queue.addr() as u32,
-            // (self.queue.addr() / crate::page_table::PAGE_SIZE) as u32,
-        );
-        /*
-        let desc_area = self
-            .queue
-            .wrapping_byte_add(core::mem::offset_of!(VirtQueue, descriptor));
-        let availble_area = self
-            .queue
-            .wrapping_byte_add(core::mem::offset_of!(VirtQueue, available));
-        let used_area = self
-            .queue
-            .wrapping_byte_add(core::mem::offset_of!(VirtQueue, used));
-        const { assert!(core::mem::size_of::<usize>() == 4) };
-        self.write_register(reg::QueueDescriptorLow, desc_area.addr() as u32);
-        self.write_register(reg::QueueAvailableLow, availble_area.addr() as u32);
-        self.write_register(reg::QueueUsedLow, used_area.addr() as u32);
-        */
+        self.write_register(reg::QueuePfn, self.queue.addr() as u32);
 
         // Mark the queue as ready for operation.
         self.write_register(reg::QueueReady, 1);
@@ -165,55 +255,22 @@ impl<'a> VirtioBlock<'a> {
         log::info!("virtio block device initialized!");
     }
 
-    /// Send the request to the disk and wait for a response.
-    fn do_request(&mut self, request: &mut BlockRequest) {
-        // Each descriptor can only be read-only or write-only, so we need to split into multiple
-        // parts.
-
-        let desc = self
-            .queue
-            .wrapping_byte_add(core::mem::offset_of!(VirtQueue, descriptor))
-            .cast::<VirtQueueDescriptor>();
-        // Descriptor 0: Device-read-only header
-        unsafe {
-            desc.write_volatile(VirtQueueDescriptor {
-                address: core::ptr::from_mut(request).addr() as u64,
-                length: core::mem::offset_of!(BlockRequest, data) as u32,
-                flags: DescriptorFlags::NEXT,
-                next: 1,
-            })
-        };
-        // Descriptor 1: The data (may be read or written)
-        unsafe {
-            desc.wrapping_add(1).write_volatile(VirtQueueDescriptor {
-                address: core::ptr::from_mut(request).addr() as u64
-                    + core::mem::offset_of!(BlockRequest, data) as u64,
-                length: SECTOR_LEN as u32,
-                flags: match request.ty {
-                    BlockRequestType::Read => DescriptorFlags::NEXT | DescriptorFlags::WRITE,
-                    BlockRequestType::Write => DescriptorFlags::NEXT,
-                    _ => {
-                        // We (the driver) don't yet support the other types.
-                        request.status = BlockRequestStatus::UNSUPPORTED;
-                        return;
-                    }
-                },
-                next: 2,
-            })
-        };
-        // Descriptor 2: The status byte (device-written)
-        unsafe {
-            desc.wrapping_add(2).write_volatile(VirtQueueDescriptor {
-                address: core::ptr::from_mut(request).addr() as u64
-                    + core::mem::offset_of!(BlockRequest, status) as u64,
-                length: 1,
-                flags: DescriptorFlags::WRITE,
-
-                next: 0,
-            })
-        };
-
+    /// Run the request indicated by `descriptor_idx` (and any descriptors chained).
+    ///
+    /// This method will block until the read succeeds.
+    ///
+    /// # Safety
+    /// The device will read and/or write the contents the descriptors point at. The caller is
+    /// responsible for ensuring that these reads and writes do not violate Rust's memory model.
+    unsafe fn run_descriptor(&mut self, descriptor_idx: u16) {
         // Reference the descriptors in the queue.
+        let available = unsafe {
+            &mut *self
+                .queue
+                .wrapping_byte_add(core::mem::offset_of!(VirtQueue, available))
+                .cast::<VirtQueueAvailableRing>()
+        };
+        available.ring[available.index as usize % QUEUE_SIZE] = descriptor_idx;
         let available_idx = self
             .queue
             .wrapping_byte_add(core::mem::offset_of!(VirtQueue, available.index))
@@ -237,37 +294,6 @@ impl<'a> VirtioBlock<'a> {
         while self.queue_busy() {
             core::hint::spin_loop();
         }
-    }
-
-    /// Read a sector from the device into the buffer.
-    pub fn read_sector(&mut self, buf: &mut [u8; SECTOR_LEN], sector: u64) -> Result<()> {
-        log::info!("Reading sector {sector} from virtio block device");
-        let mut request = BlockRequest {
-            ty: BlockRequestType::Read,
-            reserved: 0,
-            sector,
-            data: [0; 512],
-            status: BlockRequestStatus::empty(),
-        };
-        self.do_request(&mut request);
-        request.status.success()?;
-        buf.copy_from_slice(&request.data);
-        Ok(())
-    }
-
-    /// Write a sector to the buffer.
-    pub fn write_sector(&mut self, data: &[u8; SECTOR_LEN], sector: u64) -> Result<()> {
-        log::info!("Writing sector {sector} to virtio block device");
-        let mut request = BlockRequest {
-            ty: BlockRequestType::Write,
-            reserved: 0,
-            sector,
-            data: *data,
-            status: BlockRequestStatus::empty(),
-        };
-        self.do_request(&mut request);
-        request.status.success()?;
-        Ok(())
     }
 
     /// Returns `true` if the device is processing elements in the queue.
@@ -384,4 +410,4 @@ impl BlockRequestStatus {
 const QUEUE_SIZE: usize = 16;
 
 /// The size of one sector on disk.
-pub const SECTOR_LEN: usize = 512;
+pub const BLOCK_SECTOR_LEN: usize = 512;
