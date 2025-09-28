@@ -123,6 +123,11 @@ impl<'a> VirtioBlock<'a> {
         request.status.success()?;
         Ok(())
     }
+
+    /// Get the capacity in number of 512-byte sectors.
+    pub fn capacity(&self) -> u64 {
+        self.virtio.read_register(reg::Capacity)
+    }
 }
 
 /// A driver controlling a virtio device.

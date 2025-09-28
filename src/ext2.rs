@@ -1,0 +1,326 @@
+//! An implementation of ext2
+
+use crate::{
+    error::{Error, ErrorKind, Result},
+    virtio::VirtioBlock,
+};
+
+pub struct Ext2<'a> {
+    fs: VirtioBlock<'a>,
+}
+impl<'a> Ext2<'a> {
+    pub fn new(fs: VirtioBlock<'a>) -> Self {
+        let mut this = Self { fs };
+        this.superblock()
+            .check_validity()
+            .expect("Superblock has invalid data");
+        let root_inode = this.inode(2);
+        log::info!("Root inode: {:?}", root_inode);
+        let mut buf = [0; 512];
+        this.read_inode_sector(2, 0, &mut buf)
+            .expect("Failed to read root");
+        log::info!("Root contents: {:X?}", buf);
+        this
+    }
+
+    fn superblock(&mut self) -> Superblock {
+        let mut block_sector = [0; 512];
+        self.fs
+            .read_sector(&mut block_sector, 2)
+            .expect("Failed to read superblock");
+        // SAFETY:
+        // We can construct a valid superblock for any possible data.
+        unsafe {
+            core::ptr::from_ref(&block_sector)
+                .cast::<Superblock>()
+                .read_unaligned()
+        }
+    }
+
+    fn inode(&mut self, inode_num: u32) -> Inode {
+        let superblock = self.superblock();
+        let group_num = inode_num.saturating_sub(1) / superblock.inodes_per_group;
+        let group = self.block_group_descriptor(group_num);
+
+        // TODO Check that the inode is used.
+
+        let inode_block = group.inode_table_addr
+            + (inode_num.saturating_sub(1) % superblock.inodes_per_group)
+                / superblock.inodes_per_block();
+
+        let inodes_per_sector = 512 / superblock.inode_size;
+
+        let inode_sector = inode_block as u64 * (2 << superblock.block_size_raw)
+            + ((inode_num.saturating_sub(1) % superblock.inodes_per_group)
+                / inodes_per_sector as u32) as u64;
+
+        let mut buf = [0; 512];
+        self.fs
+            .read_sector(&mut buf, inode_sector)
+            .expect("Failed to read inode");
+
+        let inode_index_in_sector = (inode_num.saturating_sub(1) as usize
+            % inodes_per_sector as usize)
+            * superblock.inode_size as usize;
+
+        let inode_ptr = core::ptr::from_ref(&buf)
+            .cast::<Inode>()
+            .wrapping_byte_add(inode_index_in_sector);
+
+        unsafe { core::ptr::read_unaligned(inode_ptr) }
+    }
+
+    fn read_inode_sector(
+        &mut self,
+        inode_num: u32,
+        sector_num: u32,
+        buf: &mut [u8; 512],
+    ) -> Result<()> {
+        let superblock = self.superblock();
+        let inode = self.inode(inode_num);
+        let block_idx = sector_num / superblock.sectors_per_block();
+        let block_num = *inode
+            .direct_block_pointers
+            .get(block_idx as usize)
+            .ok_or_else(|| {
+                log::error!("TODO Support indirect block pointers");
+                Error::from(ErrorKind::Unsupported)
+            })?;
+        self.fs.read_sector(
+            buf,
+            block_num as u64 * superblock.sectors_per_block() as u64
+                + sector_num as u64 % superblock.sectors_per_block() as u64,
+        )?;
+        Ok(())
+    }
+
+    fn block_group_descriptor(&mut self, group_num: u32) -> BlockGroupDescriptor {
+        const DESCS_PER_SECTOR: usize = 512 / core::mem::size_of::<BlockGroupDescriptor>();
+        let superblock = self.superblock();
+        let table_start_sector = 2 + superblock.block_size() / 512;
+        let mut buf = [0; 512];
+        self.fs
+            .read_sector(
+                &mut buf,
+                table_start_sector + (group_num as u64 * DESCS_PER_SECTOR as u64) / 512,
+            )
+            .expect("Failed to read block descriptor table");
+        let desc_ptr = core::ptr::from_ref(&buf)
+            .cast::<BlockGroupDescriptor>()
+            .wrapping_add(group_num as usize % DESCS_PER_SECTOR);
+        unsafe { desc_ptr.read_unaligned() }
+    }
+}
+
+#[repr(C)]
+struct Superblock {
+    inode_count: u32,
+    block_count: u32,
+    super_user_blocks: u32,
+    free_blocks: u32,
+    free_inodes: u32,
+    superblock_block_number: u32,
+    block_size_raw: u32,
+    fragment_size_raw: u32,
+    blocks_per_group: u32,
+    fragments_per_group: u32,
+    inodes_per_group: u32,
+    last_mount_time: u32,
+    last_written_time: u32,
+    mounts_since_consistency_check: u16,
+    ext2_signature: u16,
+    file_system_state: u16,
+    error_handling_behavior: u16,
+    minor_version: u16,
+    last_consistency_check_time: u32,
+    consistency_check_interval: u32,
+    operating_system_creator_id: u32,
+    major_version: u32,
+    user_id_reserved_blocks: u16,
+    group_id_reserved_blocks: u16,
+    // Extended fields, only present if major version >= 1
+    first_non_reserved_inode: u32,
+    inode_size: u16,
+    superblock_block_group_number: u16,
+    /// Optional features for performance/reliability gains.
+    optional_features: OptionalFeatures,
+    /// Required features for reading or writing
+    required_features: RequiredFeatures,
+    /// Required features for writing (but reading is okay without these)
+    read_only_features: ReadOnlyFeatures,
+}
+impl Superblock {
+    /// Check that this superblock is consistent with what we can do.
+    fn check_validity(&self) -> Result<()> {
+        if self.inodes_per_group == 0 || self.blocks_per_group == 0 {
+            return Err(ErrorKind::Io.into());
+        }
+        if self.inode_count.div_ceil(self.inodes_per_group)
+            != self.block_count.div_ceil(self.blocks_per_group)
+        {
+            return Err(ErrorKind::Io.into());
+        }
+        if self.major_version != 1 {
+            log::error!("Unsupported major version {}", self.major_version);
+            return Err(ErrorKind::Unsupported.into());
+        }
+        if self.inode_size < 128 {
+            log::error!("Unsupported short inodes");
+            return Err(ErrorKind::Unsupported.into());
+        }
+        if !RequiredFeatures::SUPPORTED.contains(self.required_features) {
+            log::error!("Unsupported required features {}", self.required_features);
+            return Err(ErrorKind::Unsupported.into());
+        }
+        if !ReadOnlyFeatures::SUPPORTED.contains(self.read_only_features) {
+            log::error!("Unsupported read_only features {}", self.read_only_features);
+            return Err(ErrorKind::Unsupported.into());
+        }
+        Ok(())
+    }
+
+    /// Get the number of block groups.
+    fn num_block_groups(&self) -> u32 {
+        self.block_count.div_ceil(self.blocks_per_group)
+    }
+
+    fn block_size(&self) -> u64 {
+        1024 << self.block_size_raw
+    }
+
+    fn sectors_per_block(&self) -> u32 {
+        (self.block_size() / 512) as u32
+    }
+
+    fn inodes_per_block(&self) -> u32 {
+        (self.block_size() / self.inode_size as u64) as u32
+    }
+}
+
+#[repr(C)]
+struct BlockGroupDescriptor {
+    block_usage_bitmap_addr: u32,
+    inode_usage_bitmap_addr: u32,
+    inode_table_addr: u32,
+    free_blocks: u16,
+    free_inodes: u16,
+    num_directories: u16,
+    _unused: u16,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+struct Inode {
+    /// The file type and the permissions.
+    ///
+    /// The upper 4 bits are [`InodeType`] and the rest are [`Permissions`].
+    type_and_permissions: u16,
+    user_id: u16,
+    size_lower: u32,
+    last_access_time: u32,
+    creation_time: u32,
+    modification_time: u32,
+    deletion_time: u32,
+    group_id: u16,
+    hard_link_count: u16,
+    disk_sectors_used: u32,
+    flags: InodeFlags,
+    operating_system_specific_1: [u8; 4],
+    direct_block_pointers: [u32; 12],
+    singly_indirect_block_pointer: u32,
+    doubly_indirect_block_pointer: u32,
+    triply_indirect_block_pointer: u32,
+    generation_number: u32,
+    extended_attributes: u32,
+    size_upper_or_directory_acl: u32,
+    fragment_block_address: u32,
+    operating_system_specific_2: [u8; 12],
+}
+
+bitset::bitset!(
+    InodeFlags(u32) {
+        SynchronousUpdates = 3,
+        ImmutableFile = 4,
+        AppendOnly = 5,
+        NotInDump = 6,
+        LastAccessTimeNotUpdated = 7,
+        // Gap for reserved values
+        HashIndexedDirectory = 16,
+        AfsDirectory = 17,
+        JournalFileData = 18,
+    }
+);
+
+bitset::bitset!(
+    Permissions(u16) {
+        SetUserId = 11,
+        SetGroupId = 10,
+        Sticky = 9,
+        UserRead = 8,
+        UserWrite = 7,
+        UserExecute = 6,
+        GroupRead = 5,
+        GroupWrite = 4,
+        GroupExecute = 3,
+        OtherRead = 2,
+        OtherWrite = 1,
+        OtherExecute = 0,
+    }
+);
+
+#[repr(u8)]
+pub enum InodeType {
+    Fifo = 1,
+    CharacterDevice = 2,
+    Directory = 4,
+    BlockDevice = 6,
+    RegularFile = 8,
+    SymbolicLink = 10,
+    UnixSocket = 12,
+}
+
+#[repr(C)]
+struct DirectoryEntryHeader {
+    inode_num: u32,
+    entry_size: u16,
+    name_len: u8,
+    entry_type: u8,
+}
+
+bitset::bitset!(
+    OptionalFeatures(u32) {
+        PreallocateToDirectory = 0,
+        AfsServerInodes = 1,
+        Journal = 2,
+        InodeExtendedAttributes = 3,
+        ResizeFilesystem = 4,
+        HashIndex = 5,
+    }
+);
+impl OptionalFeatures {
+    const SUPPORTED: Self = Self::empty();
+}
+
+bitset::bitset!(
+    RequiredFeatures(u32) {
+        Compression = 0,
+        DirectoryEntryType = 1,
+        JournalReplay = 2,
+        JournalDevice = 3,
+    }
+);
+
+impl RequiredFeatures {
+    const SUPPORTED: Self = Self::DIRECTORY_ENTRY_TYPE;
+}
+
+bitset::bitset!(
+    ReadOnlyFeatures(u32) {
+        SparseGroupDescriptors = 0,
+        FileSize64Bit = 1,
+        BinaryTreeDirectories = 2,
+    }
+);
+impl ReadOnlyFeatures {
+    const SUPPORTED: Self = Self::SPARSE_GROUP_DESCRIPTORS.bit_or(Self::FILE_SIZE64_BIT);
+}
