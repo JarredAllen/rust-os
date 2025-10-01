@@ -23,10 +23,10 @@ impl<'a> VirtioBlock<'a> {
     /// # Safety
     /// This takes ownership over a device at the given address, so requires nothing else access
     /// this memory.
-    pub unsafe fn init_kernel_address() -> Self {
+    pub unsafe fn init_kernel_address() -> Result<Self> {
         let queue: *mut VirtQueue = crate::alloc::alloc_pages_zeroed(
             core::mem::size_of::<VirtQueue>().div_ceil(crate::page_table::PAGE_SIZE),
-        )
+        )?
         .cast();
         log::info!("Queue address: 0x{:X}", queue.addr());
         let virtio = unsafe {
@@ -36,7 +36,7 @@ impl<'a> VirtioBlock<'a> {
             )
         };
         assert_eq!(virtio.read_register(reg::DeviceId), 2);
-        Self { virtio }
+        Ok(Self { virtio })
     }
 
     /// Send the request to the disk and wait for a response.

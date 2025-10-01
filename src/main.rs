@@ -45,12 +45,14 @@ fn kernel_main() -> ! {
     // Keep only logs at `Info` level or above.
     logger::init_logger(log::LevelFilter::Info);
 
-    let storage = unsafe { virtio::VirtioBlock::init_kernel_address() };
+    let storage = unsafe { virtio::VirtioBlock::init_kernel_address() }
+        .expect("Failed to create storage driver");
     let _fs = ext2::Ext2::new(storage);
 
-    let mut user_proc = proc::Process::create_process(USER_PROC);
+    let mut user_proc =
+        proc::Process::create_process(USER_PROC).expect("Failed to init user process");
 
-    let mut idle_proc = proc::Process::create_process(&[]);
+    let mut idle_proc = proc::Process::create_process(&[]).expect("Failed to init user process");
     idle_proc.set_idle();
 
     unsafe {

@@ -2,6 +2,8 @@
 
 use core::ptr::NonNull;
 
+use crate::error::{OutOfMemory, Result};
+
 /// The size of a single memory page.
 pub const PAGE_SIZE: usize = 4096;
 
@@ -85,7 +87,7 @@ bitset::bitset!(
     }
 );
 
-pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) {
+pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) -> Result<(), OutOfMemory> {
     /// The flags to use for kernel memory allocations.
     ///
     /// TODO Use flags to catch bugs around wrong memory types.
@@ -105,7 +107,7 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) {
                 PhysicalAddress(paddr),
                 KERNEL_MEM_FLAGS,
             )
-        };
+        }?;
     }
     // Map the virtio block device
     unsafe {
@@ -115,7 +117,8 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) {
             PhysicalAddress(crate::virtio::BLOCK_DEVICE_ADDRESS),
             KERNEL_MEM_FLAGS,
         )
-    };
+    }?;
+    Ok(())
 }
 
 /// Allocate new memory to back `data` and map it with the given flags.
@@ -128,8 +131,8 @@ pub unsafe fn alloc_and_map_slice(
     start_vaddr: PhysicalAddress,
     data: &[u8],
     flags: PageTableFlags,
-) {
-    let new_pages = crate::alloc::alloc_pages(data.len().div_ceil(PAGE_SIZE));
+) -> Result<(), OutOfMemory> {
+    let new_pages = crate::alloc::alloc_pages(data.len().div_ceil(PAGE_SIZE))?;
     for (paddr, (vaddr, data)) in (new_pages.addr()..).step_by(PAGE_SIZE).zip(
         (start_vaddr.0..)
             .step_by(PAGE_SIZE)
@@ -142,11 +145,12 @@ pub unsafe fn alloc_and_map_slice(
                 PhysicalAddress(paddr),
                 flags,
             )
-        };
+        }?;
         // Write to `paddr` because it's also the address in kernel memory.
         let page = unsafe { &mut *core::ptr::with_exposed_provenance_mut::<[u8; 4096]>(paddr) };
         page[..data.len()].copy_from_slice(data);
     }
+    Ok(())
 }
 
 pub unsafe fn map_page(
@@ -154,7 +158,7 @@ pub unsafe fn map_page(
     vaddr: *mut (),
     paddr: PhysicalAddress,
     flags: PageTableFlags,
-) {
+) -> Result<(), OutOfMemory> {
     assert!(
         paddr.is_aligned(PAGE_SIZE),
         "Unaligned physical address 0x{:X}",
@@ -170,7 +174,7 @@ pub unsafe fn map_page(
 
     let table = unsafe { table.as_mut() };
     if !table.entries[vpn1].flags().valid() {
-        let new_page = crate::alloc::alloc_pages(1);
+        let new_page = crate::alloc::alloc_pages(1)?;
         table.entries[vpn1] = PageTableEntry::from_addr_flags(
             PhysicalAddress(new_page.addr()),
             PageTableFlags::VALID,
@@ -189,4 +193,5 @@ pub unsafe fn map_page(
 
     let vpn0 = (vaddr.addr() >> 12) & 0x3ff;
     table0.entries[vpn0] = PageTableEntry::from_addr_flags(paddr, flags | PageTableFlags::VALID);
+    Ok(())
 }

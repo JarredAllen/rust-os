@@ -1,16 +1,34 @@
 //! An implementation of ext2
 
 use crate::{
+    alloc::KByteBuf,
     error::{Error, ErrorKind, Result},
     virtio::VirtioBlock,
 };
 
 pub struct Ext2<'a> {
     fs: VirtioBlock<'a>,
+    /// The contents of the superblock.
+    ///
+    /// We reference this memory often, so we keep it cached instead of requiring a new disk read
+    /// each time we're interested in any of it.
+    superblock: KByteBuf,
 }
 impl<'a> Ext2<'a> {
-    pub fn new(fs: VirtioBlock<'a>) -> Self {
-        let mut this = Self { fs };
+    pub fn new(fs: VirtioBlock<'a>) -> Result<Self> {
+        let mut this = Self {
+            fs,
+            superblock: KByteBuf::new_zeroed(1024)?,
+        };
+        for (sector_in_block, buf) in this
+            .superblock
+            .as_chunks_mut::<512>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
+            this.fs.read_sector(buf, sector_in_block as u64 + 2)?;
+        }
         this.superblock()
             .check_validity()
             .expect("Superblock has invalid data");
@@ -20,21 +38,13 @@ impl<'a> Ext2<'a> {
         this.read_inode_sector(2, 0, &mut buf)
             .expect("Failed to read root");
         log::info!("Root contents: {:X?}", buf);
-        this
+        Ok(this)
     }
 
-    fn superblock(&mut self) -> Superblock {
-        let mut block_sector = [0; 512];
-        self.fs
-            .read_sector(&mut block_sector, 2)
-            .expect("Failed to read superblock");
-        // SAFETY:
-        // We can construct a valid superblock for any possible data.
-        unsafe {
-            core::ptr::from_ref(&block_sector)
-                .cast::<Superblock>()
-                .read_unaligned()
-        }
+    fn superblock(&self) -> Superblock {
+        let alloc = self.superblock.as_ref();
+        let superblock = core::ptr::from_ref(alloc).cast::<Superblock>();
+        unsafe { superblock.read() }
     }
 
     fn inode(&mut self, inode_num: u32) -> Inode {

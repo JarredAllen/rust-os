@@ -2,7 +2,10 @@ use core::sync::atomic::{AtomicU32, AtomicUsize};
 
 use util::cell::SyncUnsafeCell;
 
-use crate::page_table::{PageTableFlags, PhysicalAddress};
+use crate::{
+    error::Result,
+    page_table::{PageTableFlags, PhysicalAddress},
+};
 
 const KERNEL_STACK_SIZE: usize = 4096;
 const MAX_PROCS: usize = 8;
@@ -26,15 +29,15 @@ static PROCS_BUF: [SyncUnsafeCell<ProcessInner>; MAX_PROCS] = [const {
 }; MAX_PROCS];
 
 impl Process {
-    pub fn create_process(image: &[u8]) -> Self {
+    pub fn create_process(image: &[u8]) -> Result<Self> {
         let Some((buf_idx, slot)) = PROCS_BUF.iter().enumerate().find(|(_, slot)| {
             let slot = unsafe { &*slot.get() };
             slot.state == ProcessState::Unused
         }) else {
             panic!("Out of space for processes");
         };
-        unsafe { slot.get().write(ProcessInner::create_process(image)) };
-        Process { buf_idx }
+        unsafe { slot.get().write(ProcessInner::create_process(image)?) };
+        Ok(Process { buf_idx })
     }
 
     /// Mark this process as the idle process, to only be chosen if nothing else is available.
@@ -60,11 +63,11 @@ pub(crate) struct ProcessInner {
 }
 
 impl ProcessInner {
-    fn create_process(image: &[u8]) -> Self {
+    fn create_process(image: &[u8]) -> Result<Self> {
         /// Counter for incrementing process IDs.
         static PID_COUNTER: AtomicU32 = AtomicU32::new(1);
 
-        let kernel_stack = crate::alloc::alloc_pages(KERNEL_STACK_SIZE.div_ceil(4096))
+        let kernel_stack = crate::alloc::alloc_pages(KERNEL_STACK_SIZE.div_ceil(4096))?
             .cast::<[u8; KERNEL_STACK_SIZE]>();
         let sp = kernel_stack
             .wrapping_byte_add(KERNEL_STACK_SIZE)
@@ -75,8 +78,8 @@ impl ProcessInner {
             assert!(pc_ptr.is_aligned(), "Stack misaligned");
             unsafe { pc_ptr.write(user_entry as usize) };
         }
-        let page_table = core::ptr::NonNull::new(crate::alloc::alloc_pages(1)).unwrap();
-        unsafe { crate::page_table::map_kernel_memory(page_table.cast()) };
+        let page_table = core::ptr::NonNull::new(crate::alloc::alloc_pages(1)?).unwrap();
+        unsafe { crate::page_table::map_kernel_memory(page_table.cast()) }?;
         const USER_PAGE_FLAGS: PageTableFlags = PageTableFlags::VALID
             .bit_or(PageTableFlags::READABLE)
             .bit_or(PageTableFlags::WRITABLE)
@@ -89,8 +92,8 @@ impl ProcessInner {
                 image,
                 USER_PAGE_FLAGS,
             )
-        };
-        Self {
+        }?;
+        Ok(Self {
             // TODO Don't collide with pre-existing processes if it wraps.
             pid: PID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
             state: ProcessState::Runnable,
@@ -98,7 +101,7 @@ impl ProcessInner {
             // Page table has same physical and virtual address.
             page_table: PhysicalAddress(page_table.addr().into()),
             kernel_stack,
-        }
+        })
     }
 }
 unsafe impl Send for ProcessInner {}
