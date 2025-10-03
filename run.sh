@@ -34,4 +34,5 @@ fusermount -u "$FS_MOUNT"
 $QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot \
     -drive id=drive0,file="$FS_PATH",format=raw,if=none \
     -device virtio-blk-device,drive=drive0,bus=virtio-mmio-bus.0 \
+    -device virtio-rng-device,bus=virtio-mmio-bus.1 \
     -kernel target/riscv32imac-unknown-none-elf/release/rust-os

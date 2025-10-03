@@ -12,6 +12,9 @@ use crate::error::{ErrorKind, Result};
 /// The address for the block device.
 pub(crate) const BLOCK_DEVICE_ADDRESS: usize = 0x1000_1000;
 
+/// The address for the block device.
+pub(crate) const RNG_DEVICE_ADDRESS: usize = 0x1000_2000;
+
 /// A driver controlling a virtio block device.
 pub struct VirtioBlock<'a> {
     /// The underlying virtio implementation.
@@ -24,11 +27,11 @@ impl<'a> VirtioBlock<'a> {
     /// This takes ownership over a device at the given address, so requires nothing else access
     /// this memory.
     pub unsafe fn init_kernel_address() -> Result<Self> {
+        log::info!("Initializing virtio block device");
         let queue: *mut VirtQueue = crate::alloc::alloc_pages_zeroed(
             core::mem::size_of::<VirtQueue>().div_ceil(crate::page_table::PAGE_SIZE),
         )?
         .cast();
-        log::info!("Queue address: 0x{:X}", queue.addr());
         let virtio = unsafe {
             Virtio::init_for_pointers(
                 core::ptr::with_exposed_provenance_mut(BLOCK_DEVICE_ADDRESS),
@@ -130,6 +133,68 @@ impl<'a> VirtioBlock<'a> {
     }
 }
 
+pub struct VirtioRandom<'a> {
+    virtio: Virtio<'a>,
+}
+impl<'a> VirtioRandom<'a> {
+    /// Initialize at the address the device appears at in kernel memory.
+    ///
+    /// # Safety
+    /// This takes ownership over a device at the given address, so requires nothing else access
+    /// this memory.
+    pub unsafe fn init_kernel_address() -> Result<Self> {
+        log::info!("Initializing virtio random device");
+        let queue: *mut VirtQueue = crate::alloc::alloc_pages_zeroed(
+            core::mem::size_of::<VirtQueue>().div_ceil(crate::page_table::PAGE_SIZE),
+        )?
+        .cast();
+        let virtio = unsafe {
+            Virtio::init_for_pointers(
+                core::ptr::with_exposed_provenance_mut(RNG_DEVICE_ADDRESS),
+                queue,
+            )
+        };
+        assert_eq!(virtio.read_register(reg::DeviceId), 4);
+        Ok(Self { virtio })
+    }
+
+    /// Fill this buffer with random bytes.
+    ///
+    /// This function assumes the buffer is in kernel memory (i.e. the physical and virtual
+    /// addresses are the same).
+    pub fn read_random(&mut self, mut buf: &mut [u8]) -> Result<()> {
+        loop {
+            // Each descriptor can only be read-only or write-only, so we need to split into multiple
+            // parts.
+            let desc = self
+                .virtio
+                .queue
+                .wrapping_byte_add(core::mem::offset_of!(VirtQueue, descriptor))
+                .cast::<VirtQueueDescriptor>();
+            // Descriptor 0: Device-read-only header
+            unsafe {
+                desc.write_volatile(VirtQueueDescriptor {
+                    // NOTE: Don't assume physical address matches virtual.
+                    address: core::ptr::from_mut(buf).addr() as u64,
+                    length: buf.len() as u32,
+                    flags: DescriptorFlags::WRITE,
+                    next: 0,
+                })
+            };
+            // SAFETY:
+            // The descriptors point to non-overlapping sections of `request`, which we have an
+            // exclusive reference to.
+            let used = unsafe { self.virtio.run_descriptor(0) };
+            if used.length as usize == buf.len() {
+                return Ok(());
+            }
+            buf = &mut buf[used.length as usize..];
+            // TODO Enable this once it gets called from user syscalls
+            // crate::proc::sched_yield();
+        }
+    }
+}
+
 /// A driver controlling a virtio device.
 ///
 /// This type handles the code common to all virtio device types. Device-specific logic should be
@@ -187,7 +252,7 @@ impl<'a> Virtio<'a> {
 
     /// Initialize the device.
     fn initialize(&mut self) {
-        log::info!("Initializing virtio block device");
+        log::info!("Initializing virtio device");
         // Initialize device per section 3.1
         // 1. Reset the device.
         self.write_register(reg::DeviceStatus, reg::DeviceStatusFlags::empty());
@@ -207,7 +272,7 @@ impl<'a> Virtio<'a> {
 
         // Then read the features, check that we support them, and write them back.
         let features = self.read_register(reg::DeviceFeatures);
-        log::info!("virtio block device advertizes features {features}");
+        log::info!("virtio device advertizes features {features}");
         assert!(!features.read_only());
         // NOTE We currently don't use any features
 
@@ -257,7 +322,7 @@ impl<'a> Virtio<'a> {
         assert!(!status.failed());
         assert!(!status.device_needs_reset());
 
-        log::info!("virtio block device initialized!");
+        log::info!("virtio device initialized!");
     }
 
     /// Run the request indicated by `descriptor_idx` (and any descriptors chained).
@@ -267,7 +332,7 @@ impl<'a> Virtio<'a> {
     /// # Safety
     /// The device will read and/or write the contents the descriptors point at. The caller is
     /// responsible for ensuring that these reads and writes do not violate Rust's memory model.
-    unsafe fn run_descriptor(&mut self, descriptor_idx: u16) {
+    unsafe fn run_descriptor(&mut self, descriptor_idx: u16) -> VirtQueueUsedElement {
         // Reference the descriptors in the queue.
         let available = unsafe {
             &mut *self
@@ -299,6 +364,19 @@ impl<'a> Virtio<'a> {
         while self.queue_busy() {
             core::hint::spin_loop();
         }
+        let used_idx = unsafe {
+            self.queue
+                .wrapping_byte_add(core::mem::offset_of!(VirtQueue, used.index))
+                .cast::<u16>()
+                .read_volatile()
+        } as usize
+            % QUEUE_SIZE;
+        let queue_elem = self
+            .queue
+            .wrapping_byte_add(core::mem::offset_of!(VirtQueue, used.ring))
+            .cast::<VirtQueueUsedElement>()
+            .wrapping_add(used_idx);
+        unsafe { queue_elem.read_volatile() }
     }
 
     /// Returns `true` if the device is processing elements in the queue.

@@ -49,6 +49,15 @@ fn kernel_main() -> ! {
         .expect("Failed to create storage driver");
     let _fs = ext2::Ext2::new(storage);
 
+    let mut rng = unsafe { virtio::VirtioRandom::init_kernel_address() }
+        .expect("Failed to create RNG driver");
+
+    {
+        let mut rng_buf = [0u8; 32];
+        rng.read_random(&mut rng_buf).expect("Failed to poll RNG");
+        log::info!("Read random data: {rng_buf:X?}");
+    }
+
     let mut user_proc =
         proc::Process::create_process(USER_PROC).expect("Failed to init user process");
 
