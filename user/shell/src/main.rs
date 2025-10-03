@@ -26,7 +26,7 @@ fn main() {
                         let mut buf = [0u8; 16];
                         userlib::sys::get_random(&mut buf);
                         for byte in buf {
-                            print!("{byte:X}");
+                            print!("{byte:02X}");
                         }
                         println!();
                     }

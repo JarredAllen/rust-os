@@ -194,6 +194,8 @@ impl Drop for KByteBuf {
         }
     }
 }
+unsafe impl Send for KByteBuf {}
+unsafe impl Sync for KByteBuf {}
 
 /// An entry in the free page list for [`KPageAlloc`].
 struct FreePageListEntry {

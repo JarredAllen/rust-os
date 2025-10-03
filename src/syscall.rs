@@ -45,8 +45,13 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             let buf_len = frame.a2 as usize;
             // TODO Check that the program is allowed to write to this buffer
             let buf = unsafe { core::slice::from_raw_parts_mut(buf_start, buf_len) };
-            // TODO Actually get random data
-            buf.fill(0x77);
+            crate::DEVICE_TREE
+                .random
+                .lock()
+                .as_mut()
+                .unwrap()
+                .read_random(buf)
+                .unwrap();
         }
         number => panic!("Unrecognized syscall {number}"), // TODO don't panic here
     }

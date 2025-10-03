@@ -9,6 +9,7 @@ mod logger;
 mod page_table;
 mod proc;
 mod sbi;
+mod sync;
 mod syscall;
 mod trap;
 mod virtio;
@@ -47,16 +48,13 @@ fn kernel_main() -> ! {
 
     let storage = unsafe { virtio::VirtioBlock::init_kernel_address() }
         .expect("Failed to create storage driver");
-    let _fs = ext2::Ext2::new(storage);
+    let fs = ext2::Ext2::new(storage).expect("Failed to initialize filesystem");
 
-    let mut rng = unsafe { virtio::VirtioRandom::init_kernel_address() }
+    let rng = unsafe { virtio::VirtioRandom::init_kernel_address() }
         .expect("Failed to create RNG driver");
 
-    {
-        let mut rng_buf = [0u8; 32];
-        rng.read_random(&mut rng_buf).expect("Failed to poll RNG");
-        log::info!("Read random data: {rng_buf:X?}");
-    }
+    *DEVICE_TREE.random.lock() = Some(rng);
+    *DEVICE_TREE.storage.lock() = Some(fs);
 
     let mut user_proc =
         proc::Process::create_process(USER_PROC).expect("Failed to init user process");
@@ -74,6 +72,21 @@ fn kernel_main() -> ! {
         proc::sched_yield();
     }
 }
+
+struct DeviceTree {
+    random: sync::KSpinLock<Option<virtio::VirtioRandom<'static>>>,
+    storage: sync::KSpinLock<Option<ext2::Ext2<'static>>>,
+}
+impl DeviceTree {
+    pub const fn new() -> Self {
+        Self {
+            random: sync::KSpinLock::new(None),
+            storage: sync::KSpinLock::new(None),
+        }
+    }
+}
+
+static DEVICE_TREE: DeviceTree = DeviceTree::new();
 
 #[unsafe(no_mangle)]
 fn handle_trap(frame: &mut trap::TrapFrame) {
@@ -203,6 +216,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     _ = writeln!(sbi::SbiPutcharWriter, "{info}");
 
     loop {
+        unsafe { core::arch::asm!("wfi", options(nomem, preserves_flags, nostack)) };
         core::hint::spin_loop();
     }
 }

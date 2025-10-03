@@ -163,7 +163,14 @@ impl<'a> VirtioRandom<'a> {
     /// This function assumes the buffer is in kernel memory (i.e. the physical and virtual
     /// addresses are the same).
     pub fn read_random(&mut self, mut buf: &mut [u8]) -> Result<()> {
+        const MAX_NUM_ITERS: u8 = 128;
+        let mut num_iters = 0;
         loop {
+            num_iters += 1;
+            if num_iters > MAX_NUM_ITERS {
+                log::error!("Entropy device didn't make random data on time");
+                return Err(crate::error::ErrorKind::Io.into());
+            }
             // Each descriptor can only be read-only or write-only, so we need to split into multiple
             // parts.
             let desc = self
@@ -174,8 +181,7 @@ impl<'a> VirtioRandom<'a> {
             // Descriptor 0: Device-read-only header
             unsafe {
                 desc.write_volatile(VirtQueueDescriptor {
-                    // NOTE: Don't assume physical address matches virtual.
-                    address: core::ptr::from_mut(buf).addr() as u64,
+                    address: crate::page_table::paddr_for_vaddr(core::ptr::from_mut(buf)).0 as u64,
                     length: buf.len() as u32,
                     flags: DescriptorFlags::WRITE,
                     next: 0,
@@ -385,6 +391,9 @@ impl<'a> Virtio<'a> {
         queue.available.index != queue.used.index
     }
 }
+
+unsafe impl Send for Virtio<'_> {}
+unsafe impl Sync for Virtio<'_> {}
 
 /// A register for a virtio block device.
 ///

@@ -75,6 +75,10 @@ impl PhysicalAddress {
     pub const fn null() -> Self {
         Self(0)
     }
+
+    pub const fn byte_add(self, offset: usize) -> Self {
+        Self(self.0 + offset)
+    }
 }
 
 bitset::bitset!(
@@ -91,8 +95,7 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) -> Result<(), OutOfMe
     /// The flags to use for kernel memory allocations.
     ///
     /// TODO Use flags to catch bugs around wrong memory types.
-    const KERNEL_MEM_FLAGS: PageTableFlags = PageTableFlags::VALID
-        .bit_or(PageTableFlags::READABLE)
+    const KERNEL_MEM_FLAGS: PageTableFlags = PageTableFlags::READABLE
         .bit_or(PageTableFlags::WRITABLE)
         .bit_or(PageTableFlags::EXECUTABLE);
 
@@ -115,7 +118,16 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) -> Result<(), OutOfMe
             table,
             core::ptr::with_exposed_provenance_mut(crate::virtio::BLOCK_DEVICE_ADDRESS),
             PhysicalAddress(crate::virtio::BLOCK_DEVICE_ADDRESS),
-            KERNEL_MEM_FLAGS,
+            PageTableFlags::READABLE.bit_or(PageTableFlags::WRITABLE),
+        )
+    }?;
+    // Map the virtio entropy device
+    unsafe {
+        map_page(
+            table,
+            core::ptr::with_exposed_provenance_mut(crate::virtio::RNG_DEVICE_ADDRESS),
+            PhysicalAddress(crate::virtio::RNG_DEVICE_ADDRESS),
+            PageTableFlags::READABLE.bit_or(PageTableFlags::WRITABLE),
         )
     }?;
     Ok(())
@@ -153,8 +165,24 @@ pub unsafe fn alloc_and_map_slice(
     Ok(())
 }
 
-pub unsafe fn paddr_for_vaddr(_vaddr: *mut ()) -> PhysicalAddress {
-    todo!()
+/// Get the physical address for a given virtual address.
+#[inline(never)]
+pub fn paddr_for_vaddr<T: ?Sized>(vaddr: *mut T) -> PhysicalAddress {
+    if let Some(page_table) = crate::csr::current_page_table() {
+        let vaddr = vaddr.addr();
+        let vpn1 = (vaddr >> 22) & 0x3ff;
+        let vpn2 = (vaddr >> 12) & 0x3ff;
+        let offset_in_page = vaddr & 0xfff;
+        let table0 = core::ptr::without_provenance::<PageTable>(
+            unsafe { page_table.as_ref() }.entries[vpn1]
+                .physical_addr()
+                .0,
+        );
+        let entry = unsafe { &*table0 }.entries[vpn2];
+        entry.physical_addr().byte_add(offset_in_page)
+    } else {
+        PhysicalAddress(vaddr.addr())
+    }
 }
 
 pub unsafe fn map_page(
