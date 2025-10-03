@@ -22,6 +22,14 @@ fn main() {
                         println!("{pid}");
                     }
                     "exit" => userlib::sys::exit(0),
+                    "getrandom" => {
+                        let mut buf = [0u8; 16];
+                        userlib::sys::get_random(&mut buf);
+                        for byte in buf {
+                            print!("{byte:X}");
+                        }
+                        println!();
+                    }
                     _ => {
                         println!("Unrecognized command: {cmd}");
                     }

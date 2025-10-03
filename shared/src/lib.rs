@@ -13,4 +13,6 @@ pub enum Syscall {
     SchedYield = 4,
     /// Exit the current process.
     Exit = 5,
+    /// Fill a buffer with random bytes.
+    GetRandom = 6,
 }

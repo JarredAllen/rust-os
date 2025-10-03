@@ -153,6 +153,10 @@ pub unsafe fn alloc_and_map_slice(
     Ok(())
 }
 
+pub unsafe fn paddr_for_vaddr(_vaddr: *mut ()) -> PhysicalAddress {
+    todo!()
+}
+
 pub unsafe fn map_page(
     mut table: NonNull<PageTable>,
     vaddr: *mut (),
@@ -192,6 +196,7 @@ pub unsafe fn map_page(
     };
 
     let vpn0 = (vaddr.addr() >> 12) & 0x3ff;
+    assert!(!table0.entries[vpn0].flags().valid());
     table0.entries[vpn0] = PageTableEntry::from_addr_flags(paddr, flags | PageTableFlags::VALID);
     Ok(())
 }

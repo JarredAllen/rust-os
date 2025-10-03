@@ -40,6 +40,16 @@ pub fn exit(status: i32) -> ! {
     unreachable!("exit syscall should never return")
 }
 
+/// Fill a buffer with random bytes.
+pub fn get_random(buf: &mut [u8]) {
+    unsafe {
+        syscall(
+            Syscall::GetRandom as u32,
+            [core::ptr::from_mut(buf).addr() as u32, buf.len() as u32, 0],
+        )
+    };
+}
+
 /// Perform an arbitrary syscall.
 ///
 /// See [`Syscall`] for documentation on the supported syscall types and what their numbers are.
