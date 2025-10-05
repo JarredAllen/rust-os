@@ -37,7 +37,11 @@ impl<'a> Ext2<'a> {
         let mut buf = [0; 512];
         this.read_inode_sector(2, 0, &mut buf)
             .expect("Failed to read root");
-        log::info!("Root contents: {:X?}", buf);
+        if let Some(entry) = this.read_dir(2).find_for_name("lorem-ipsum.txt") {
+            log::info!("Found `lorem-ipsum.txt`: {entry:?}");
+            let entry_inode = this.inode(entry.inode_num);
+            log::info!("`lorem-ipsum.txt` inode: {:?}", entry_inode);
+        }
         Ok(this)
     }
 
@@ -61,7 +65,7 @@ impl<'a> Ext2<'a> {
         let inodes_per_sector = 512 / superblock.inode_size;
 
         let inode_sector = inode_block as u64 * (2 << superblock.block_size_raw)
-            + ((inode_num.saturating_sub(1) % superblock.inodes_per_group)
+            + ((inode_num.saturating_sub(1) % superblock.inodes_per_block())
                 / inodes_per_sector as u32) as u64;
 
         let mut buf = [0; 512];
@@ -78,6 +82,18 @@ impl<'a> Ext2<'a> {
             .wrapping_byte_add(inode_index_in_sector);
 
         unsafe { core::ptr::read_unaligned(inode_ptr) }
+    }
+
+    fn read_dir(&mut self, dir_inode_num: u32) -> DirectoryEntryIter {
+        let inode = self.inode(dir_inode_num);
+        // TODO Check that it is a directory
+        if inode.size_lower != 1024 {
+            todo!("Support big directories");
+        }
+        DirectoryEntryIter {
+            buf: self.read_block(inode.direct_block_pointers[0]),
+            idx: 0,
+        }
     }
 
     fn read_inode_sector(
@@ -107,6 +123,7 @@ impl<'a> Ext2<'a> {
     fn block_group_descriptor(&mut self, group_num: u32) -> BlockGroupDescriptor {
         const DESCS_PER_SECTOR: usize = 512 / core::mem::size_of::<BlockGroupDescriptor>();
         let superblock = self.superblock();
+        assert!(group_num < superblock.num_block_groups());
         let table_start_sector = 2 + superblock.block_size() / 512;
         let mut buf = [0; 512];
         self.fs
@@ -120,9 +137,60 @@ impl<'a> Ext2<'a> {
             .wrapping_add(group_num as usize % DESCS_PER_SECTOR);
         unsafe { desc_ptr.read_unaligned() }
     }
+
+    /// Read the given block number.
+    ///
+    /// This takes extra time to read the whole block, so only use this method if you actually need
+    /// to get the whole block.
+    fn read_block(&mut self, block_num: u32) -> KByteBuf {
+        let mut buf =
+            KByteBuf::new_zeroed(self.superblock().block_size() as usize).expect("Out of memory");
+        let start_sector = block_num as u64 * self.superblock().sectors_per_block() as u64;
+        for (sector_in_block, buf) in buf.as_chunks_mut().0.iter_mut().enumerate() {
+            self.fs
+                .read_sector(buf, start_sector + sector_in_block as u64)
+                .expect("Failed to read sector of block");
+        }
+        buf
+    }
+}
+
+struct DirectoryEntryIter {
+    buf: KByteBuf,
+    idx: usize,
+}
+impl DirectoryEntryIter {
+    fn next(&mut self) -> Option<&DirectoryEntry> {
+        if self.idx >= self.buf.len() {
+            return None;
+        }
+        let entry_ptr = self
+            .buf
+            .as_ptr()
+            .wrapping_byte_add(self.idx)
+            .cast::<DirectoryEntryHeader>();
+        self.idx += unsafe { &*entry_ptr }.entry_size as usize;
+        // SAFETY:
+        // If the filesystem is valid, then the memory is correct for this. And the return lifetime is tied to `self`, so it is valid for that long.
+        Some(unsafe { DirectoryEntry::for_header(entry_ptr) })
+    }
+
+    /// Find the entry with this name, if one exists.
+    ///
+    /// After completion, this iterator is immediately after the found entry, or at the end if it
+    /// couldn't be found.
+    fn find_for_name(&mut self, name: &str) -> Option<DirectoryEntryHeader> {
+        loop {
+            let next_entry = self.next()?;
+            if &next_entry.name == name {
+                return Some(next_entry.header);
+            }
+        }
+    }
 }
 
 #[repr(C)]
+#[derive(Debug)]
 struct Superblock {
     inode_count: u32,
     block_count: u32,
@@ -290,11 +358,35 @@ pub enum InodeType {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
 struct DirectoryEntryHeader {
     inode_num: u32,
     entry_size: u16,
     name_len: u8,
     entry_type: u8,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+struct DirectoryEntry {
+    header: DirectoryEntryHeader,
+    // TODO I don't think names have to be utf-8
+    name: str,
+}
+impl DirectoryEntry {
+    /// Create a [`DirectoryEntry`] for the given header.
+    ///
+    /// # Safety
+    /// `header_ptr` must be valid for reading for `'a`, and also have provenance for the name
+    /// section that follows.
+    unsafe fn for_header<'a>(header_ptr: *const DirectoryEntryHeader) -> &'a Self {
+        let len = unsafe { &*header_ptr }.name_len as usize;
+        // We make a pointer to the value by first artificially constructing a pointer to a slice
+        // with the right length. The slice pointer has the same format, so we can transmute.
+        let similar_ptr = core::ptr::slice_from_raw_parts(header_ptr, len);
+        let entry_ptr: *const Self = unsafe { core::mem::transmute(similar_ptr) };
+        unsafe { &*entry_ptr }
+    }
 }
 
 bitset::bitset!(

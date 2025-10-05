@@ -156,6 +156,13 @@ impl KByteBuf {
             buf: NonNull::from(&[]),
         }
     }
+
+    /// Get a pointer to the start of the allocation.
+    ///
+    /// This pointer is valid for reading the whole buffer for the lifetime of `self`.
+    pub fn as_ptr(&self) -> *const u8 {
+        self.buf.as_ptr().cast()
+    }
 }
 impl core::ops::Deref for KByteBuf {
     type Target = [u8];
