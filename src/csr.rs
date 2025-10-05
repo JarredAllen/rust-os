@@ -16,7 +16,6 @@ macro_rules! read_csr {
         }
     };
 }
-pub(crate) use read_csr;
 
 /// Write a value to a CSR
 macro_rules! write_csr {
@@ -27,7 +26,8 @@ macro_rules! write_csr {
         )
     };
 }
-pub(crate) use write_csr;
+
+pub(crate) use {read_csr, write_csr};
 
 /// Write the satp csr to set the page table.
 pub unsafe fn set_page_table(page_table_addr: PhysicalAddress) {
@@ -42,4 +42,26 @@ pub fn current_page_table() -> Option<NonNull<crate::page_table::PageTable>> {
         let paddr = (satp as usize & !(1 << 31)) * crate::page_table::PAGE_SIZE;
         NonNull::new(core::ptr::with_exposed_provenance_mut(paddr)).unwrap()
     })
+}
+
+/// An RAII around accessing user-mode memory.
+///
+/// If you want to interact with user-mode memory, you must hold an instance of this struct while
+/// doing so.
+pub struct AllowUserModeMemory {
+    _marker: (),
+}
+impl AllowUserModeMemory {
+    /// Allow accessing user-mode memory until this value is dropped.
+    pub fn allow() -> Self {
+        let sstatus = read_csr!(sstatus);
+        unsafe { write_csr!(sstatus = sstatus | 1 << 18) };
+        Self { _marker: () }
+    }
+}
+impl Drop for AllowUserModeMemory {
+    fn drop(&mut self) {
+        let sstatus = read_csr!(sstatus);
+        unsafe { write_csr!(sstatus = sstatus & !(1 << 18)) };
+    }
 }

@@ -25,6 +25,7 @@ static PROCS_BUF: [SyncUnsafeCell<ProcessInner>; MAX_PROCS] = [const {
         sp: core::ptr::dangling_mut(),
         page_table: PhysicalAddress::null(),
         kernel_stack: core::ptr::dangling_mut(),
+        resource_descriptors: core::ptr::dangling_mut(),
     })
 }; MAX_PROCS];
 
@@ -60,6 +61,7 @@ pub(crate) struct ProcessInner {
     pub sp: *mut (),
     pub page_table: PhysicalAddress,
     pub kernel_stack: *mut [u8; KERNEL_STACK_SIZE],
+    pub resource_descriptors: *mut [ResourceDescriptor; MAX_NUM_RESOURCE_DESCRIPTORS],
 }
 
 impl ProcessInner {
@@ -93,6 +95,7 @@ impl ProcessInner {
                 USER_PAGE_FLAGS,
             )
         }?;
+        let resource_descriptors = crate::alloc::alloc_pages_zeroed(1)?.cast();
         Ok(Self {
             // TODO Don't collide with pre-existing processes if it wraps.
             pid: PID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
@@ -101,11 +104,32 @@ impl ProcessInner {
             // Page table has same physical and virtual address.
             page_table: PhysicalAddress(page_table.addr().into()),
             kernel_stack,
+            resource_descriptors,
         })
     }
 }
 unsafe impl Send for ProcessInner {}
 unsafe impl Sync for ProcessInner {}
+
+#[repr(C)]
+pub struct ResourceDescriptor {
+    pub(crate) flags: FileFlags,
+    pub(crate) inode_num: u32,
+    pub(crate) offset: u64,
+}
+
+pub(crate) const MAX_NUM_RESOURCE_DESCRIPTORS: usize =
+    crate::page_table::PAGE_SIZE / core::mem::size_of::<ResourceDescriptor>();
+
+bitset::bitset!(
+    pub FileFlags(u32) {
+        Present,
+        Readable,
+    }
+);
+impl FileFlags {
+    pub const NEW_READ_ONLY: Self = Self::PRESENT.bit_or(Self::READABLE);
+}
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum ProcessState {

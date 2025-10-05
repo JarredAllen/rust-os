@@ -15,4 +15,10 @@ pub enum Syscall {
     Exit = 5,
     /// Fill a buffer with random bytes.
     GetRandom = 6,
+    /// Open a file
+    Open = 7,
+    /// Close a resource descriptor
+    Close = 8,
+    /// Read data from a resource descriptor.
+    Read = 9,
 }

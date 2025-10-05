@@ -32,16 +32,6 @@ impl<'a> Ext2<'a> {
         this.superblock()
             .check_validity()
             .expect("Superblock has invalid data");
-        let root_inode = this.inode(2);
-        log::info!("Root inode: {:?}", root_inode);
-        let mut buf = [0; 512];
-        this.read_inode_sector(2, 0, &mut buf)
-            .expect("Failed to read root");
-        if let Some(entry) = this.read_dir(2).find_for_name("lorem-ipsum.txt") {
-            log::info!("Found `lorem-ipsum.txt`: {entry:?}");
-            let entry_inode = this.inode(entry.inode_num);
-            log::info!("`lorem-ipsum.txt` inode: {:?}", entry_inode);
-        }
         Ok(this)
     }
 
@@ -96,6 +86,45 @@ impl<'a> Ext2<'a> {
         }
     }
 
+    /// Get the inode number for a specific path, if present.
+    pub fn lookup_path<'path>(
+        &mut self,
+        path_parts: impl IntoIterator<Item = &'path str>,
+    ) -> Option<u32> {
+        let mut inode_num = 2;
+        for part in path_parts {
+            inode_num = self.read_dir(inode_num).find_for_name(part)?.inode_num;
+        }
+        Some(inode_num)
+    }
+
+    pub fn read_file_from_offset(
+        &mut self,
+        inode_num: u32,
+        mut offset: u64,
+        mut buf: &mut [u8],
+    ) -> Result<usize> {
+        let inode = self.inode(inode_num);
+        if buf.len() as u64 > inode.file_size() - offset {
+            buf = &mut buf[..(inode.file_size() - offset) as usize];
+        }
+        let sector_buf = &mut [0; 512];
+        let mut sector_num = (offset / 512) as u32;
+        let mut write_len = 0;
+        loop {
+            if offset >= inode.file_size() {
+                return Ok(write_len);
+            }
+            self.read_inode_sector(inode_num, sector_num, sector_buf)?;
+            let this_write_len = buf.len().min(512);
+            buf[..this_write_len].copy_from_slice(&sector_buf[..this_write_len]);
+            buf = &mut buf[this_write_len..];
+            write_len += this_write_len;
+            offset += this_write_len as u64;
+            sector_num += 1;
+        }
+    }
+
     fn read_inode_sector(
         &mut self,
         inode_num: u32,
@@ -104,6 +133,7 @@ impl<'a> Ext2<'a> {
     ) -> Result<()> {
         let superblock = self.superblock();
         let inode = self.inode(inode_num);
+        assert_eq!(inode.inode_type(), InodeType::RegularFile);
         let block_idx = sector_num / superblock.sectors_per_block();
         let block_num = *inode
             .direct_block_pointers
@@ -314,6 +344,24 @@ struct Inode {
     fragment_block_address: u32,
     operating_system_specific_2: [u8; 12],
 }
+impl Inode {
+    fn file_size(&self) -> u64 {
+        self.size_lower as u64 | ((self.size_upper_or_directory_acl as u64) << 32)
+    }
+
+    fn inode_type(&self) -> InodeType {
+        match (self.type_and_permissions >> 12) & 0xF {
+            1 => InodeType::Fifo,
+            2 => InodeType::CharacterDevice,
+            4 => InodeType::Directory,
+            6 => InodeType::BlockDevice,
+            8 => InodeType::RegularFile,
+            10 => InodeType::SymbolicLink,
+            12 => InodeType::UnixSocket,
+            ty => unreachable!("Invalid inode type {ty}"),
+        }
+    }
+}
 
 bitset::bitset!(
     InodeFlags(u32) {
@@ -347,6 +395,7 @@ bitset::bitset!(
 );
 
 #[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InodeType {
     Fifo = 1,
     CharacterDevice = 2,

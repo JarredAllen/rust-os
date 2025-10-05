@@ -4,6 +4,9 @@ const GET_PID_NUM: u32 = shared::Syscall::GetPid as u32;
 const SCHED_YIELD_NUM: u32 = shared::Syscall::SchedYield as u32;
 const EXIT_NUM: u32 = shared::Syscall::Exit as u32;
 const GET_RANDOM_NUM: u32 = shared::Syscall::GetRandom as u32;
+const OPEN_NUM: u32 = shared::Syscall::Open as u32;
+const CLOSE_NUM: u32 = shared::Syscall::Close as u32;
+const READ_NUM: u32 = shared::Syscall::Read as u32;
 
 pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
     match frame.a0 {
@@ -52,6 +55,80 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
                 .unwrap()
                 .read_random(buf)
                 .unwrap();
+        }
+        OPEN_NUM => {
+            let _allow = crate::csr::AllowUserModeMemory::allow();
+            let path_name = str::from_utf8(unsafe {
+                core::slice::from_raw_parts(
+                    core::ptr::with_exposed_provenance(frame.a1 as usize),
+                    frame.a2 as usize,
+                )
+            })
+            .expect("Path wasn't valid utf-8");
+            // TODO Support relative paths.
+            let path_name = path_name
+                .strip_prefix('/')
+                .expect("Paths should start with '/'");
+
+            let proc = unsafe { crate::proc::current_proc() };
+            let (desc_num, slot) = unsafe { &mut *proc.resource_descriptors }
+                .iter_mut()
+                .enumerate()
+                .find(|(_, slot)| !slot.flags.present())
+                .expect("Process out of file descriptor slots");
+            // Return the file descriptor number to the process.
+            frame.a0 = desc_num as u32;
+            // TODO fully initialize the slot
+            slot.flags = crate::proc::FileFlags::NEW_READ_ONLY;
+            slot.offset = 0;
+            // TODO Get the correct inode.
+            slot.inode_num = crate::DEVICE_TREE
+                .storage
+                .lock()
+                .as_mut()
+                .unwrap()
+                .lookup_path(path_name.split('/'))
+                .expect("Couldn't find given path");
+        }
+        CLOSE_NUM => {
+            let desc_num = frame.a1;
+            assert!(desc_num < crate::proc::MAX_NUM_RESOURCE_DESCRIPTORS as u32);
+            let proc = unsafe { crate::proc::current_proc() };
+            let desc = unsafe {
+                &mut *proc
+                    .resource_descriptors
+                    .cast::<crate::proc::ResourceDescriptor>()
+                    .wrapping_add(desc_num as usize)
+            };
+            assert!(desc.flags.present());
+            desc.flags = crate::proc::FileFlags::empty();
+        }
+        READ_NUM => {
+            let _allow = crate::csr::AllowUserModeMemory::allow();
+            let user_buf = unsafe {
+                core::slice::from_raw_parts_mut(
+                    core::ptr::with_exposed_provenance_mut::<u8>(frame.a2 as usize),
+                    frame.a3 as usize,
+                )
+            };
+            let proc = unsafe { crate::proc::current_proc() };
+            let desc_num = frame.a1;
+            let desc = unsafe {
+                &mut *proc
+                    .resource_descriptors
+                    .cast::<crate::proc::ResourceDescriptor>()
+                    .wrapping_add(desc_num as usize)
+            };
+            assert!(desc.flags.present() && desc.flags.readable());
+            let read_len = crate::DEVICE_TREE
+                .storage
+                .lock()
+                .as_mut()
+                .unwrap()
+                .read_file_from_offset(desc.inode_num, desc.offset, user_buf)
+                .expect("Read failed");
+
+            frame.a0 = read_len as u32;
         }
         number => panic!("Unrecognized syscall {number}"), // TODO don't panic here
     }

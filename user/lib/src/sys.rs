@@ -50,6 +50,36 @@ pub fn get_random(buf: &mut [u8]) {
     };
 }
 
+pub(crate) fn open(path: &str) -> i32 {
+    unsafe {
+        syscall(
+            Syscall::Open as u32,
+            [
+                core::ptr::from_ref(path).addr() as u32,
+                path.len() as u32,
+                0,
+            ],
+        ) as i32
+    }
+}
+
+pub(crate) fn close(descriptor_num: i32) {
+    unsafe { syscall(Syscall::Close as u32, [descriptor_num as u32, 0, 0]) };
+}
+
+pub(crate) fn read(descriptor_num: i32, buf: &mut [u8]) -> usize {
+    unsafe {
+        syscall(
+            Syscall::Read as u32,
+            [
+                descriptor_num as u32,
+                core::ptr::from_ref(buf).addr() as u32,
+                buf.len() as u32,
+            ],
+        ) as usize
+    }
+}
+
 /// Perform an arbitrary syscall.
 ///
 /// See [`Syscall`] for documentation on the supported syscall types and what their numbers are.

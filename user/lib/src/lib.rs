@@ -2,6 +2,7 @@
 
 #![no_std]
 
+pub mod fs;
 mod init;
 pub mod io;
 pub mod prelude;
