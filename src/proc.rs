@@ -125,6 +125,7 @@ bitset::bitset!(
     pub FileFlags(u32) {
         Present,
         Readable,
+        Writable,
     }
 );
 impl FileFlags {

@@ -48,6 +48,16 @@ fn main() {
                             str::from_utf8(file.read(read_buf)).expect("File was invalid utf-8");
                         print!("{contents}");
                     }
+                    "append" => {
+                        let Some(filename) = cmd_parts.next() else {
+                            print!("Missing filename for append command\n> ");
+                            continue;
+                        };
+                        let file = File::open(filename);
+                        let append_buf = &cmd.as_bytes()[8 + filename.len()..];
+                        println!("Writing {}", hex_display::Hex(append_buf));
+                        file.write_all(append_buf);
+                    }
                     _ => {
                         println!("Unrecognized command: {cmd}");
                     }

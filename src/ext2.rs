@@ -125,6 +125,15 @@ impl<'a> Ext2<'a> {
         }
     }
 
+    pub fn write_file_from_offset(
+        &mut self,
+        _inode_num: u32,
+        _offset: u64,
+        _buf: &[u8],
+    ) -> Result<usize> {
+        todo!("Write to a file");
+    }
+
     fn read_inode_sector(
         &mut self,
         inode_num: u32,

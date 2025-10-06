@@ -41,11 +41,15 @@ dependencies = [
 [[package]]
 name = "shared"
 version = "0.1.0"
+dependencies = [
+ "bitset",
+]
 
 [[package]]
 name = "shell"
 version = "0.1.0"
 dependencies = [
+ "hex-display",
  "userlib",
 ]
 

@@ -7,6 +7,7 @@ const GET_RANDOM_NUM: u32 = shared::Syscall::GetRandom as u32;
 const OPEN_NUM: u32 = shared::Syscall::Open as u32;
 const CLOSE_NUM: u32 = shared::Syscall::Close as u32;
 const READ_NUM: u32 = shared::Syscall::Read as u32;
+const WRITE_NUM: u32 = shared::Syscall::Write as u32;
 
 pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
     match frame.a0 {
@@ -126,6 +127,33 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
                 .as_mut()
                 .unwrap()
                 .read_file_from_offset(desc.inode_num, desc.offset, user_buf)
+                .expect("Read failed");
+
+            frame.a0 = read_len as u32;
+        }
+        WRITE_NUM => {
+            let _allow = crate::csr::AllowUserModeMemory::allow();
+            let user_buf = unsafe {
+                core::slice::from_raw_parts(
+                    core::ptr::with_exposed_provenance::<u8>(frame.a2 as usize),
+                    frame.a3 as usize,
+                )
+            };
+            let proc = unsafe { crate::proc::current_proc() };
+            let desc_num = frame.a1;
+            let desc = unsafe {
+                &mut *proc
+                    .resource_descriptors
+                    .cast::<crate::proc::ResourceDescriptor>()
+                    .wrapping_add(desc_num as usize)
+            };
+            assert!(desc.flags.present() && desc.flags.readable());
+            let read_len = crate::DEVICE_TREE
+                .storage
+                .lock()
+                .as_mut()
+                .unwrap()
+                .write_file_from_offset(desc.inode_num, desc.offset, user_buf)
                 .expect("Read failed");
 
             frame.a0 = read_len as u32;

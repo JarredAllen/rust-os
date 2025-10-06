@@ -5,4 +5,5 @@ edition = "2024"
 build = "../user-build.rs"
 
 [dependencies]
-userlib = { version = "0.1.0", path = "../lib" }
+hex-display.workspace = true
+userlib = { path = "../lib" }

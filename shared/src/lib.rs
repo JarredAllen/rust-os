@@ -21,4 +21,17 @@ pub enum Syscall {
     Close = 8,
     /// Read data from a resource descriptor.
     Read = 9,
+    /// Write data to a resource descriptor.
+    Write = 10,
+}
+
+bitset::bitset!(
+    pub FileOpenFlags(u32) {
+        ReadOnly,
+        WriteOnly,
+        Append,
+    }
+);
+impl FileOpenFlags {
+    pub const READWRITE: Self = Self::READ_ONLY.bit_or(Self::WRITE_ONLY);
 }

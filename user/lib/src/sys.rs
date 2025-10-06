@@ -50,14 +50,14 @@ pub fn get_random(buf: &mut [u8]) {
     };
 }
 
-pub(crate) fn open(path: &str) -> i32 {
+pub(crate) fn open(path: &str, flags: shared::FileOpenFlags) -> i32 {
     unsafe {
         syscall(
             Syscall::Open as u32,
             [
                 core::ptr::from_ref(path).addr() as u32,
                 path.len() as u32,
-                0,
+                flags.into(),
             ],
         ) as i32
     }
@@ -71,6 +71,19 @@ pub(crate) fn read(descriptor_num: i32, buf: &mut [u8]) -> usize {
     unsafe {
         syscall(
             Syscall::Read as u32,
+            [
+                descriptor_num as u32,
+                core::ptr::from_ref(buf).addr() as u32,
+                buf.len() as u32,
+            ],
+        ) as usize
+    }
+}
+
+pub(crate) fn write(descriptor_num: i32, buf: &[u8]) -> usize {
+    unsafe {
+        syscall(
+            Syscall::Write as u32,
             [
                 descriptor_num as u32,
                 core::ptr::from_ref(buf).addr() as u32,
