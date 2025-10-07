@@ -1,18 +1,19 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use userlib::{fs::File, prelude::*};
 
 #[unsafe(no_mangle)]
 fn main() {
-    let line_buf = &mut [0; 128];
-    let mut line_buf_len = 0;
+    let mut line_buf = alloc::vec::Vec::<u8>::new();
     print!("> ");
     loop {
         match userlib::sys::getchar() {
             // On newline, run the queued command
             '\r' | '\n' => {
-                let cmd = str::from_utf8(&line_buf[..line_buf_len]).expect("Invalid utf-8");
+                let cmd = str::from_utf8(&line_buf).expect("Invalid utf-8");
                 println!();
 
                 let mut cmd_parts = cmd.split_whitespace(); // TODO Support complex escaping
@@ -30,7 +31,10 @@ fn main() {
                     }
                     "exit" => userlib::sys::exit(0),
                     "getrandom" => {
-                        let mut buf = [0u8; 16];
+                        let len = cmd_parts
+                            .next()
+                            .map_or(16, |s| s.parse().expect("Invalid number"));
+                        let mut buf = alloc::vec![0u8; len];
                         userlib::sys::get_random(&mut buf);
                         for byte in buf {
                             print!("{byte:02X}");
@@ -40,6 +44,7 @@ fn main() {
                     "cat" => {
                         let Some(filename) = cmd_parts.next() else {
                             print!("Missing filename for cat command\n> ");
+                            line_buf.clear();
                             continue;
                         };
                         let file = File::open(filename);
@@ -51,6 +56,7 @@ fn main() {
                     "append" => {
                         let Some(filename) = cmd_parts.next() else {
                             print!("Missing filename for append command\n> ");
+                            line_buf.clear();
                             continue;
                         };
                         let file = File::open(filename);
@@ -62,14 +68,12 @@ fn main() {
                         println!("Unrecognized command: {cmd}");
                     }
                 }
-
-                line_buf_len = 0;
+                line_buf.clear();
                 print!("> ");
             }
             // Handle backspace to allow command editing.
             '\x7f' => {
-                if let Some(new_len) = line_buf_len.checked_sub(1) {
-                    line_buf_len = new_len;
+                if line_buf.pop().is_some() {
                     print!("\x08 \x08");
                 }
             }
@@ -78,8 +82,7 @@ fn main() {
             // TODO Handle other special characters
             c => {
                 userlib::sys::putchar(c);
-                line_buf[line_buf_len] = c as u8;
-                line_buf_len += 1;
+                line_buf.push(u8::try_from(c).expect("Non-u8 character"));
             }
         }
     }

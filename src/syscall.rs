@@ -8,6 +8,7 @@ const OPEN_NUM: u32 = shared::Syscall::Open as u32;
 const CLOSE_NUM: u32 = shared::Syscall::Close as u32;
 const READ_NUM: u32 = shared::Syscall::Read as u32;
 const WRITE_NUM: u32 = shared::Syscall::Write as u32;
+const MMAP_NUM: u32 = shared::Syscall::Mmap as u32;
 
 pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
     match frame.a0 {
@@ -157,6 +158,35 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
                 .expect("Read failed");
 
             frame.a0 = read_len as u32;
+        }
+        MMAP_NUM => {
+            let alloc_size = frame.a1;
+            let alloc_num_pages = (alloc_size as usize).div_ceil(crate::page_table::PAGE_SIZE);
+            let current_table = crate::csr::current_page_table().unwrap();
+            let alloc_first_page = crate::alloc::alloc_pages_zeroed(alloc_num_pages).unwrap();
+            let proc = unsafe { crate::proc::current_proc() };
+            let start_user_vaddr = proc.mmap_head;
+            // Leave a 1-page gap to help user programs avoid overruns.
+            proc.mmap_head += crate::page_table::PAGE_SIZE * (alloc_num_pages + 1);
+            for (paddr, user_vaddr) in (alloc_first_page.addr()..)
+                .step_by(crate::page_table::PAGE_SIZE)
+                .take(alloc_num_pages)
+                .zip((start_user_vaddr..).step_by(crate::page_table::PAGE_SIZE))
+            {
+                unsafe {
+                    crate::page_table::map_page(
+                        current_table,
+                        core::ptr::without_provenance_mut(user_vaddr),
+                        crate::page_table::PhysicalAddress(paddr),
+                        crate::page_table::PageTableFlags::READABLE
+                            | crate::page_table::PageTableFlags::WRITABLE
+                            | crate::page_table::PageTableFlags::EXECUTABLE
+                            | crate::page_table::PageTableFlags::USER_ACCESSIBLE,
+                    )
+                }
+                .expect("Failed to allocate page");
+            }
+            frame.a0 = start_user_vaddr as u32;
         }
         number => panic!("Unrecognized syscall {number}"), // TODO don't panic here
     }

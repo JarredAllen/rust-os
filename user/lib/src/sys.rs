@@ -93,6 +93,11 @@ pub(crate) fn write(descriptor_num: i32, buf: &[u8]) -> usize {
     }
 }
 
+pub(crate) fn mmap(size: usize) -> *mut () {
+    let addr = unsafe { syscall(Syscall::Mmap as u32, [size as u32, 0, 0]) };
+    core::ptr::without_provenance_mut(addr as usize)
+}
+
 /// Perform an arbitrary syscall.
 ///
 /// See [`Syscall`] for documentation on the supported syscall types and what their numbers are.

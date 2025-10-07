@@ -191,12 +191,20 @@ impl<'a> VirtioRandom<'a> {
             // The descriptors point to non-overlapping sections of `request`, which we have an
             // exclusive reference to.
             let used = unsafe { self.virtio.run_descriptor(0, 0) };
-            if used.length as usize == buf.len() {
+            if used.length as usize >= buf.len() {
+                if used.length as usize > buf.len() {
+                    // NOTE: I'm not sure why it would return a length greater than the original
+                    // buffer, I should figure this out.
+                    log::error!(
+                        "entropy device wrote longer than expected: {} bytes written out of {}",
+                        used.length,
+                        buf.len()
+                    );
+                }
                 return Ok(());
             }
             buf = &mut buf[used.length as usize..];
-            // TODO Enable this once it gets called from user syscalls
-            // crate::proc::sched_yield();
+            crate::proc::sched_yield();
         }
     }
 }

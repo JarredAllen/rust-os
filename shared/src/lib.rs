@@ -23,6 +23,8 @@ pub enum Syscall {
     Read = 9,
     /// Write data to a resource descriptor.
     Write = 10,
+    /// Map a new memory region.
+    Mmap = 11,
 }
 
 bitset::bitset!(

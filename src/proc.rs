@@ -26,6 +26,7 @@ static PROCS_BUF: [SyncUnsafeCell<ProcessInner>; MAX_PROCS] = [const {
         page_table: PhysicalAddress::null(),
         kernel_stack: core::ptr::dangling_mut(),
         resource_descriptors: core::ptr::dangling_mut(),
+        mmap_head: 0,
     })
 }; MAX_PROCS];
 
@@ -62,6 +63,7 @@ pub(crate) struct ProcessInner {
     pub page_table: PhysicalAddress,
     pub kernel_stack: *mut [u8; KERNEL_STACK_SIZE],
     pub resource_descriptors: *mut [ResourceDescriptor; MAX_NUM_RESOURCE_DESCRIPTORS],
+    pub mmap_head: usize,
 }
 
 impl ProcessInner {
@@ -105,6 +107,7 @@ impl ProcessInner {
             page_table: PhysicalAddress(page_table.addr().into()),
             kernel_stack,
             resource_descriptors,
+            mmap_head: 0x02000000,
         })
     }
 }
