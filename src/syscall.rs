@@ -1,3 +1,5 @@
+use crate::resource_desc::ResourceDescriptor;
+
 const PUT_CHAR_NUM: u32 = shared::Syscall::PutChar as u32;
 const GET_CHAR_NUM: u32 = shared::Syscall::GetChar as u32;
 const GET_PID_NUM: u32 = shared::Syscall::GetPid as u32;
@@ -76,21 +78,24 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             let (desc_num, slot) = unsafe { &mut *proc.resource_descriptors }
                 .iter_mut()
                 .enumerate()
-                .find(|(_, slot)| !slot.flags.present())
+                .find(|(_, slot)| !slot.present())
                 .expect("Process out of file descriptor slots");
             // Return the file descriptor number to the process.
             frame.a0 = desc_num as u32;
-            // TODO fully initialize the slot
-            slot.flags = crate::proc::FileFlags::NEW_READ_ONLY;
-            slot.offset = 0;
-            // TODO Get the correct inode.
-            slot.inode_num = crate::DEVICE_TREE
+            // Initialize the slot
+            let inode_num = crate::DEVICE_TREE
                 .storage
                 .lock()
                 .as_mut()
                 .unwrap()
                 .lookup_path(path_name.split('/'))
                 .expect("Couldn't find given path");
+            *slot =
+                ResourceDescriptor::for_file(crate::resource_desc::FileResourceDescriptorData {
+                    flags: crate::resource_desc::FileFlags::NEW_READ_ONLY,
+                    offset: 0,
+                    inode_num,
+                });
         }
         CLOSE_NUM => {
             let desc_num = frame.a1;
@@ -99,11 +104,11 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             let desc = unsafe {
                 &mut *proc
                     .resource_descriptors
-                    .cast::<crate::proc::ResourceDescriptor>()
+                    .cast::<crate::resource_desc::ResourceDescriptor>()
                     .wrapping_add(desc_num as usize)
             };
-            assert!(desc.flags.present());
-            desc.flags = crate::proc::FileFlags::empty();
+            assert!(desc.present());
+            desc.close();
         }
         READ_NUM => {
             let _allow = crate::csr::AllowUserModeMemory::allow();
@@ -118,19 +123,10 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             let desc = unsafe {
                 &mut *proc
                     .resource_descriptors
-                    .cast::<crate::proc::ResourceDescriptor>()
+                    .cast::<crate::resource_desc::ResourceDescriptor>()
                     .wrapping_add(desc_num as usize)
             };
-            assert!(desc.flags.present() && desc.flags.readable());
-            let read_len = crate::DEVICE_TREE
-                .storage
-                .lock()
-                .as_mut()
-                .unwrap()
-                .read_file_from_offset(desc.inode_num, desc.offset, user_buf)
-                .expect("Read failed");
-
-            frame.a0 = read_len as u32;
+            frame.a0 = desc.read(user_buf) as u32;
         }
         WRITE_NUM => {
             let _allow = crate::csr::AllowUserModeMemory::allow();
@@ -145,19 +141,10 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             let desc = unsafe {
                 &mut *proc
                     .resource_descriptors
-                    .cast::<crate::proc::ResourceDescriptor>()
+                    .cast::<crate::resource_desc::ResourceDescriptor>()
                     .wrapping_add(desc_num as usize)
             };
-            assert!(desc.flags.present() && desc.flags.readable());
-            let read_len = crate::DEVICE_TREE
-                .storage
-                .lock()
-                .as_mut()
-                .unwrap()
-                .write_file_from_offset(desc.inode_num, desc.offset, user_buf)
-                .expect("Read failed");
-
-            frame.a0 = read_len as u32;
+            frame.a0 = desc.write(user_buf) as u32;
         }
         MMAP_NUM => {
             let alloc_size = frame.a1;

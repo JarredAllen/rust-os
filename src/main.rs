@@ -8,6 +8,7 @@ mod ext2;
 mod logger;
 mod page_table;
 mod proc;
+mod resource_desc;
 mod sbi;
 mod sync;
 mod syscall;

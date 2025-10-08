@@ -5,6 +5,7 @@ use util::cell::SyncUnsafeCell;
 use crate::{
     error::Result,
     page_table::{PageTableFlags, PhysicalAddress},
+    resource_desc::ResourceDescriptor,
 };
 
 const KERNEL_STACK_SIZE: usize = 4096;
@@ -97,7 +98,12 @@ impl ProcessInner {
                 USER_PAGE_FLAGS,
             )
         }?;
-        let resource_descriptors = crate::alloc::alloc_pages_zeroed(1)?.cast();
+        let resource_descriptors = crate::alloc::alloc_pages(1)?
+            .cast::<[ResourceDescriptor; MAX_NUM_RESOURCE_DESCRIPTORS]>();
+        unsafe {
+            resource_descriptors
+                .write([const { ResourceDescriptor::null() }; MAX_NUM_RESOURCE_DESCRIPTORS]);
+        }
         Ok(Self {
             // TODO Don't collide with pre-existing processes if it wraps.
             pid: PID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
@@ -114,26 +120,8 @@ impl ProcessInner {
 unsafe impl Send for ProcessInner {}
 unsafe impl Sync for ProcessInner {}
 
-#[repr(C)]
-pub struct ResourceDescriptor {
-    pub(crate) flags: FileFlags,
-    pub(crate) inode_num: u32,
-    pub(crate) offset: u64,
-}
-
 pub(crate) const MAX_NUM_RESOURCE_DESCRIPTORS: usize =
     crate::page_table::PAGE_SIZE / core::mem::size_of::<ResourceDescriptor>();
-
-bitset::bitset!(
-    pub FileFlags(u32) {
-        Present,
-        Readable,
-        Writable,
-    }
-);
-impl FileFlags {
-    pub const NEW_READ_ONLY: Self = Self::PRESENT.bit_or(Self::READABLE);
-}
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum ProcessState {
