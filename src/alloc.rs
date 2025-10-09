@@ -2,8 +2,10 @@
 
 mod bytebuf;
 mod raw;
+mod rc;
 
 pub use bytebuf::KByteBuf;
+pub use rc::KrcBox;
 
 use core::{
     cell::UnsafeCell,
