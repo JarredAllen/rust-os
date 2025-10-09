@@ -33,6 +33,9 @@ impl Allocator {
     /// Request to allocate for a given layout.
     ///
     /// The given allocation (which may be larger than requested) is returned as a slice.
+    ///
+    /// This function may return `None` if we're out of memory and attempting to allocate more
+    /// fails.
     fn allocate_inner(&self, layout: core::alloc::Layout) -> Option<NonNull<[u8]>> {
         if layout.size() == 0 {
             return Some(NonNull::slice_from_raw_parts(
@@ -52,7 +55,7 @@ impl Allocator {
         // `class_for_size` always returns the same size for a given size class, so we meet the
         // precondition.
         let head_ptr = unsafe { self.classes[size_class].lock().allocate(raw_size) };
-        Some(NonNull::slice_from_raw_parts(head_ptr.cast(), raw_size))
+        Some(NonNull::slice_from_raw_parts(head_ptr?.cast(), raw_size))
     }
 
     /// Deallocate a given allocation.
@@ -143,24 +146,27 @@ impl FixedSizeAllocator {
 
     /// Get a new allocation of the given size.
     ///
+    /// This function may return `None` if we're out of memory and attempting to allocate more
+    /// fails.
+    ///
     /// # Safety
     /// This function may only be called with one value of `size` for a given
     /// [`FixedSizeAllocator`].
-    unsafe fn allocate(&mut self, size: usize) -> NonNull<()> {
+    unsafe fn allocate(&mut self, size: usize) -> Option<NonNull<()>> {
         assert!(size >= core::mem::size_of::<FreeListNode>());
         if let Some(free_head) = self.free_list {
             self.free_list = unsafe { free_head.as_ref() }.next;
-            return free_head.cast();
+            return Some(free_head.cast());
         }
         if self.fresh_head.addr().is_multiple_of(4096) {
-            self.fresh_head = crate::sys::mmap(4096);
+            self.fresh_head = crate::sys::mmap(4096).ok()?.as_ptr();
         }
         // SAFETY:
         // Null pointers are a multiple of 4096, so we'd hit the above branch and grab a new
         // page to use.
         let ret_ptr = unsafe { NonNull::new_unchecked(self.fresh_head) };
         self.fresh_head = self.fresh_head.wrapping_byte_add(size);
-        ret_ptr
+        Some(ret_ptr)
     }
 
     /// Free the given pointer.

@@ -3,39 +3,39 @@ pub struct File {
 }
 
 impl File {
-    pub fn open(path: &str) -> Self {
-        let descriptor = crate::sys::open(path, shared::FileOpenFlags::READ_ONLY);
-        Self { descriptor }
+    pub fn open(path: &str) -> Result<Self, shared::ErrorKind> {
+        let descriptor = crate::sys::open(path, shared::FileOpenFlags::READ_ONLY)?;
+        Ok(Self { descriptor })
     }
 
-    pub fn append(path: &str) -> Self {
+    pub fn append(path: &str) -> Result<Self, shared::ErrorKind> {
         let descriptor = crate::sys::open(
             path,
             shared::FileOpenFlags::WRITE_ONLY | shared::FileOpenFlags::APPEND,
-        );
-        Self { descriptor }
+        )?;
+        Ok(Self { descriptor })
     }
 
     /// Read from this file into a buffer.
     ///
     /// Returns the written memory, which will be at the start of [`buf`].
-    pub fn read<'a>(&self, buf: &'a mut [u8]) -> &'a mut [u8] {
-        let read_length = crate::sys::read(self.descriptor, buf);
-        &mut buf[..read_length]
+    pub fn read<'a>(&self, buf: &'a mut [u8]) -> Result<&'a mut [u8], shared::ErrorKind> {
+        let read_length = crate::sys::read(self.descriptor, buf)?;
+        Ok(&mut buf[..read_length])
     }
 
     /// Write from a buffer into this file.
     ///
     /// Returns the number of bytes writen, which will be at the start of [`buf`].
-    pub fn write(&self, buf: &[u8]) -> usize {
+    pub fn write(&self, buf: &[u8]) -> Result<usize, shared::ErrorKind> {
         crate::sys::write(self.descriptor, buf)
     }
 
-    pub fn write_all(&self, mut buf: &[u8]) {
+    pub fn write_all(&self, mut buf: &[u8]) -> Result<(), shared::ErrorKind> {
         loop {
-            let len = self.write(buf);
+            let len = self.write(buf)?;
             if len == buf.len() {
-                return;
+                return Ok(());
             } else {
                 buf = &buf[len..];
             }

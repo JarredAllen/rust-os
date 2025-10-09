@@ -47,10 +47,11 @@ fn main() {
                             line_buf.clear();
                             continue;
                         };
-                        let file = File::open(filename);
+                        let file = File::open(filename).expect("Failed to open file");
                         let read_buf = &mut [0; 2048];
                         let contents =
-                            str::from_utf8(file.read(read_buf)).expect("File was invalid utf-8");
+                            str::from_utf8(file.read(read_buf).expect("Failed to read file"))
+                                .expect("File was invalid utf-8");
                         print!("{contents}");
                     }
                     "append" => {
@@ -59,10 +60,10 @@ fn main() {
                             line_buf.clear();
                             continue;
                         };
-                        let file = File::open(filename);
+                        let file = File::open(filename).expect("Failed to open file");
                         let append_buf = &cmd.as_bytes()[8 + filename.len()..];
                         println!("Writing {}", hex_display::Hex(append_buf));
-                        file.write_all(append_buf);
+                        file.write_all(append_buf).expect("Error writing to buffer");
                     }
                     _ => {
                         println!("Unrecognized command: {cmd}");

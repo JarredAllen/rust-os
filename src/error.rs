@@ -2,6 +2,8 @@
 
 use core::{error, fmt};
 
+pub use shared::ErrorKind;
+
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 /// A generic error that can be produced.
@@ -21,23 +23,6 @@ impl fmt::Display for Error {
     }
 }
 impl error::Error for Error {}
-
-/// Possible kinds of errors.
-#[derive(Debug, Clone, Copy)]
-pub enum ErrorKind {
-    OutOfMemory,
-    Io,
-    Unsupported,
-}
-impl fmt::Display for ErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::OutOfMemory => "Out of memory",
-            Self::Io => "I/O Error",
-            Self::Unsupported => "Unsupported operation",
-        })
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct OutOfMemory;

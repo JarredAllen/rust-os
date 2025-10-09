@@ -19,14 +19,18 @@ pub fn putstr(s: &str) {
 
 /// Read a character from the console.
 pub fn getchar() -> char {
-    let ret = unsafe { syscall(Syscall::GetChar as u32, [0; 3]) };
-    // SAFETY: Kernel promises this will be a char.
-    unsafe { char::from_u32_unchecked(ret) }
+    let (ret, ret_err) = unsafe { syscall(Syscall::GetChar as u32, [0; 3]) };
+    if ret == 0 {
+        panic!("Hit error: {}", ret_err.unwrap());
+    } else {
+        // SAFETY: Kernel promises this will be a char.
+        unsafe { char::from_u32_unchecked(ret) }
+    }
 }
 
 /// Get the PID of the currently-active process.
 pub fn get_pid() -> u32 {
-    unsafe { syscall(Syscall::GetPid as u32, [0; 3]) }
+    unsafe { syscall(Syscall::GetPid as u32, [0; 3]) }.0
 }
 
 /// Yield the current time slice.
@@ -50,8 +54,8 @@ pub fn get_random(buf: &mut [u8]) {
     };
 }
 
-pub(crate) fn open(path: &str, flags: shared::FileOpenFlags) -> i32 {
-    unsafe {
+pub(crate) fn open(path: &str, flags: shared::FileOpenFlags) -> Result<i32, shared::ErrorKind> {
+    let (ret, ret_err) = unsafe {
         syscall(
             Syscall::Open as u32,
             [
@@ -59,16 +63,21 @@ pub(crate) fn open(path: &str, flags: shared::FileOpenFlags) -> i32 {
                 path.len() as u32,
                 flags.into(),
             ],
-        ) as i32
+        )
+    };
+    let ret = ret as i32;
+    if ret == -1 {
+        return Err(ret_err.unwrap());
     }
+    Ok(ret)
 }
 
 pub(crate) fn close(descriptor_num: i32) {
     unsafe { syscall(Syscall::Close as u32, [descriptor_num as u32, 0, 0]) };
 }
 
-pub(crate) fn read(descriptor_num: i32, buf: &mut [u8]) -> usize {
-    unsafe {
+pub(crate) fn read(descriptor_num: i32, buf: &mut [u8]) -> Result<usize, shared::ErrorKind> {
+    let (read_len, err) = unsafe {
         syscall(
             Syscall::Read as u32,
             [
@@ -76,12 +85,16 @@ pub(crate) fn read(descriptor_num: i32, buf: &mut [u8]) -> usize {
                 core::ptr::from_ref(buf).addr() as u32,
                 buf.len() as u32,
             ],
-        ) as usize
+        )
+    };
+    if read_len == -1_i32 as u32 {
+        return Err(err.unwrap());
     }
+    Ok(read_len as usize)
 }
 
-pub(crate) fn write(descriptor_num: i32, buf: &[u8]) -> usize {
-    unsafe {
+pub(crate) fn write(descriptor_num: i32, buf: &[u8]) -> Result<usize, shared::ErrorKind> {
+    let (write_len, err) = unsafe {
         syscall(
             Syscall::Write as u32,
             [
@@ -89,13 +102,19 @@ pub(crate) fn write(descriptor_num: i32, buf: &[u8]) -> usize {
                 core::ptr::from_ref(buf).addr() as u32,
                 buf.len() as u32,
             ],
-        ) as usize
+        )
+    };
+    if write_len == -1_i32 as u32 {
+        return Err(err.unwrap());
     }
+    Ok(write_len as usize)
 }
 
-pub(crate) fn mmap(size: usize) -> *mut () {
-    let addr = unsafe { syscall(Syscall::Mmap as u32, [size as u32, 0, 0]) };
-    core::ptr::without_provenance_mut(addr as usize)
+pub(crate) fn mmap(size: usize) -> Result<core::ptr::NonNull<()>, shared::ErrorKind> {
+    let (addr, err) = unsafe { syscall(Syscall::Mmap as u32, [size as u32, 0, 0]) };
+    crate::println!("Received MMAP of size {size} at 0x{addr:08X}");
+    core::ptr::NonNull::new(core::ptr::without_provenance_mut(addr as usize))
+        .ok_or_else(|| err.unwrap())
 }
 
 /// Perform an arbitrary syscall.
@@ -105,8 +124,12 @@ pub(crate) fn mmap(size: usize) -> *mut () {
 /// # Safety
 /// This can be wildly unsafe, depending on the call done and the arguments. Prefer using the safe
 /// helper functions where possible.
-pub unsafe fn syscall(syscall_number: u32, [arg0, arg1, arg2]: [u32; 3]) -> u32 {
+pub unsafe fn syscall(
+    syscall_number: u32,
+    [arg0, arg1, arg2]: [u32; 3],
+) -> (u32, Option<shared::ErrorKind>) {
     let ret_val;
+    let ret_err;
     unsafe {
         core::arch::asm!(
             "ecall",
@@ -114,8 +137,9 @@ pub unsafe fn syscall(syscall_number: u32, [arg0, arg1, arg2]: [u32; 3]) -> u32 
             in("a1")  arg0,
             in("a2")  arg1,
             in("a3")  arg2,
-            lateout("a0") ret_val,
+            lateout("a1") ret_val,
+            lateout("a2") ret_err,
         )
     }
-    ret_val
+    (ret_val, shared::ErrorKind::from_num(ret_err))
 }

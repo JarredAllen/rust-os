@@ -1,4 +1,4 @@
-use crate::resource_desc::ResourceDescriptor;
+use crate::{error::Result, resource_desc::ResourceDescriptor};
 
 const PUT_CHAR_NUM: u32 = shared::Syscall::PutChar as u32;
 const GET_CHAR_NUM: u32 = shared::Syscall::GetChar as u32;
@@ -23,7 +23,7 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             loop {
                 match crate::sbi::getchar() {
                     Ok(Some(c)) => {
-                        frame.a0 = c.get() as u32;
+                        frame.a1 = c.get() as u32;
                         break;
                     }
                     Ok(None) => {}
@@ -35,7 +35,7 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             }
         }
         GET_PID_NUM => {
-            frame.a0 = crate::proc::current_pid();
+            frame.a1 = crate::proc::current_pid();
         }
         SCHED_YIELD_NUM => {
             crate::proc::sched_yield();
@@ -61,41 +61,20 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
                 .unwrap();
         }
         OPEN_NUM => {
-            let _allow = crate::csr::AllowUserModeMemory::allow();
-            let path_name = str::from_utf8(unsafe {
+            // TODO Check that the program is allowed to read from this buffer
+            let path_name = unsafe {
                 core::slice::from_raw_parts(
                     core::ptr::with_exposed_provenance(frame.a1 as usize),
                     frame.a2 as usize,
                 )
-            })
-            .expect("Path wasn't valid utf-8");
-            // TODO Support relative paths.
-            let path_name = path_name
-                .strip_prefix('/')
-                .expect("Paths should start with '/'");
-
-            let proc = unsafe { crate::proc::current_proc() };
-            let (desc_num, slot) = unsafe { &mut *proc.resource_descriptors }
-                .iter_mut()
-                .enumerate()
-                .find(|(_, slot)| !slot.present())
-                .expect("Process out of file descriptor slots");
-            // Return the file descriptor number to the process.
-            frame.a0 = desc_num as u32;
-            // Initialize the slot
-            let inode_num = crate::DEVICE_TREE
-                .storage
-                .lock()
-                .as_mut()
-                .unwrap()
-                .lookup_path(path_name.split('/'))
-                .expect("Couldn't find given path");
-            *slot =
-                ResourceDescriptor::for_file(crate::resource_desc::FileResourceDescriptorData {
-                    flags: crate::resource_desc::FileFlags::NEW_READ_ONLY,
-                    offset: 0,
-                    inode_num,
-                });
+            };
+            match syscall_open(path_name) {
+                Ok(desc) => frame.a1 = desc as u32,
+                Err(e) => {
+                    frame.a1 = -1_i32 as u32;
+                    frame.a2 = e.kind as u32;
+                }
+            }
         }
         CLOSE_NUM => {
             let desc_num = frame.a1;
@@ -111,70 +90,131 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             desc.close();
         }
         READ_NUM => {
-            let _allow = crate::csr::AllowUserModeMemory::allow();
+            let desc_num = frame.a1;
+            // TODO Check that the program is allowed to write to this buffer
             let user_buf = unsafe {
                 core::slice::from_raw_parts_mut(
                     core::ptr::with_exposed_provenance_mut::<u8>(frame.a2 as usize),
                     frame.a3 as usize,
                 )
             };
-            let proc = unsafe { crate::proc::current_proc() };
-            let desc_num = frame.a1;
-            let desc = unsafe {
-                &mut *proc
-                    .resource_descriptors
-                    .cast::<crate::resource_desc::ResourceDescriptor>()
-                    .wrapping_add(desc_num as usize)
-            };
-            frame.a0 = desc.read(user_buf) as u32;
+            match syscall_read(desc_num, user_buf) {
+                Ok(read_len) => frame.a1 = read_len as u32,
+                Err(e) => {
+                    frame.a1 = -1_i32 as u32;
+                    frame.a2 = e.kind as u32;
+                }
+            }
         }
         WRITE_NUM => {
-            let _allow = crate::csr::AllowUserModeMemory::allow();
+            let desc_num = frame.a1;
+            // TODO Check that the program is allowed to read from this buffer
             let user_buf = unsafe {
                 core::slice::from_raw_parts(
                     core::ptr::with_exposed_provenance::<u8>(frame.a2 as usize),
                     frame.a3 as usize,
                 )
             };
-            let proc = unsafe { crate::proc::current_proc() };
-            let desc_num = frame.a1;
-            let desc = unsafe {
-                &mut *proc
-                    .resource_descriptors
-                    .cast::<crate::resource_desc::ResourceDescriptor>()
-                    .wrapping_add(desc_num as usize)
-            };
-            frame.a0 = desc.write(user_buf) as u32;
+            match syscall_write(desc_num, user_buf) {
+                Ok(write_len) => frame.a1 = write_len as u32,
+                Err(e) => {
+                    frame.a1 = -1_i32 as u32;
+                    frame.a2 = e.kind as u32;
+                }
+            }
         }
         MMAP_NUM => {
             let alloc_size = frame.a1;
-            let alloc_num_pages = (alloc_size as usize).div_ceil(crate::page_table::PAGE_SIZE);
-            let current_table = crate::csr::current_page_table().unwrap();
-            let alloc_first_page = crate::alloc::alloc_pages_zeroed(alloc_num_pages).unwrap();
-            let proc = unsafe { crate::proc::current_proc() };
-            let start_user_vaddr = proc.mmap_head;
-            // Leave a 1-page gap to help user programs avoid overruns.
-            proc.mmap_head += crate::page_table::PAGE_SIZE * (alloc_num_pages + 1);
-            for (paddr, user_vaddr) in (alloc_first_page.addr()..)
-                .step_by(crate::page_table::PAGE_SIZE)
-                .take(alloc_num_pages)
-                .zip((start_user_vaddr..).step_by(crate::page_table::PAGE_SIZE))
-            {
-                unsafe {
-                    crate::page_table::map_page(
-                        current_table,
-                        core::ptr::without_provenance_mut(user_vaddr),
-                        crate::page_table::PhysicalAddress(paddr),
-                        crate::page_table::PageTableFlags::READABLE
-                            | crate::page_table::PageTableFlags::WRITABLE
-                            | crate::page_table::PageTableFlags::EXECUTABLE
-                            | crate::page_table::PageTableFlags::USER_ACCESSIBLE,
-                    )
+            match syscall_mmap(alloc_size) {
+                Ok(start_user_vaddr) => frame.a1 = start_user_vaddr as u32,
+                Err(e) => {
+                    frame.a1 = 0;
+                    frame.a2 = e.kind as u32;
                 }
-                .expect("Failed to allocate page");
             }
-            frame.a0 = start_user_vaddr as u32;
         }
         number => panic!("Unrecognized syscall {number}"), // TODO don't panic here
     }
+}
+
+fn syscall_open(path_name: &[u8]) -> Result<usize> {
+    let _allow = crate::csr::AllowUserModeMemory::allow();
+    let path_name = str::from_utf8(path_name).map_err(|_| shared::ErrorKind::InvalidFormat)?;
+    // TODO Support relative paths.
+    let path_name = path_name
+        .strip_prefix('/')
+        .ok_or(shared::ErrorKind::InvalidFormat)?;
+
+    let proc = unsafe { crate::proc::current_proc() };
+    let (desc_num, slot) = unsafe { &mut *proc.resource_descriptors }
+        .iter_mut()
+        .enumerate()
+        .find(|(_, slot)| !slot.present())
+        .ok_or(shared::ErrorKind::LimitReached)?;
+    // Initialize the slot
+    let inode_num = crate::DEVICE_TREE
+        .storage
+        .lock()
+        .as_mut()
+        .unwrap()
+        .lookup_path(path_name.split('/'))
+        .ok_or(shared::ErrorKind::NotFound)?;
+    *slot = ResourceDescriptor::for_file(crate::resource_desc::FileResourceDescriptorData {
+        flags: crate::resource_desc::FileFlags::NEW_READ_ONLY,
+        offset: 0,
+        inode_num,
+    });
+    Ok(desc_num)
+}
+
+fn syscall_read(desc_num: u32, user_buf: &mut [u8]) -> Result<usize> {
+    let _allow = crate::csr::AllowUserModeMemory::allow();
+    let proc = unsafe { crate::proc::current_proc() };
+    let desc = unsafe {
+        &mut *proc
+            .resource_descriptors
+            .cast::<crate::resource_desc::ResourceDescriptor>()
+            .wrapping_add(desc_num as usize)
+    };
+    Ok(desc.read(user_buf))
+}
+
+fn syscall_write(desc_num: u32, user_buf: &[u8]) -> Result<usize> {
+    let _allow = crate::csr::AllowUserModeMemory::allow();
+    let proc = unsafe { crate::proc::current_proc() };
+    let desc = unsafe {
+        &mut *proc
+            .resource_descriptors
+            .cast::<crate::resource_desc::ResourceDescriptor>()
+            .wrapping_add(desc_num as usize)
+    };
+    Ok(desc.write(user_buf))
+}
+
+fn syscall_mmap(alloc_size: u32) -> Result<usize> {
+    let alloc_num_pages = (alloc_size as usize).div_ceil(crate::page_table::PAGE_SIZE);
+    let current_table = crate::csr::current_page_table().unwrap();
+    let alloc_first_page = crate::alloc::alloc_pages_zeroed(alloc_num_pages).unwrap();
+    let proc = unsafe { crate::proc::current_proc() };
+    let start_user_vaddr = proc.mmap_head;
+    // Leave a 1-page gap to help user programs avoid overruns.
+    proc.mmap_head += crate::page_table::PAGE_SIZE * (alloc_num_pages + 1);
+    for (paddr, user_vaddr) in (alloc_first_page.addr()..)
+        .step_by(crate::page_table::PAGE_SIZE)
+        .take(alloc_num_pages)
+        .zip((start_user_vaddr..).step_by(crate::page_table::PAGE_SIZE))
+    {
+        unsafe {
+            crate::page_table::map_page(
+                current_table,
+                core::ptr::without_provenance_mut(user_vaddr),
+                crate::page_table::PhysicalAddress(paddr),
+                crate::page_table::PageTableFlags::READABLE
+                    | crate::page_table::PageTableFlags::WRITABLE
+                    | crate::page_table::PageTableFlags::EXECUTABLE
+                    | crate::page_table::PageTableFlags::USER_ACCESSIBLE,
+            )
+        }?;
+    }
+    Ok(start_user_vaddr)
 }
