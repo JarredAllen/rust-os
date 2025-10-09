@@ -112,7 +112,6 @@ pub(crate) fn write(descriptor_num: i32, buf: &[u8]) -> Result<usize, shared::Er
 
 pub(crate) fn mmap(size: usize) -> Result<core::ptr::NonNull<()>, shared::ErrorKind> {
     let (addr, err) = unsafe { syscall(Syscall::Mmap as u32, [size as u32, 0, 0]) };
-    crate::println!("Received MMAP of size {size} at 0x{addr:08X}");
     core::ptr::NonNull::new(core::ptr::without_provenance_mut(addr as usize))
         .ok_or_else(|| err.unwrap())
 }
