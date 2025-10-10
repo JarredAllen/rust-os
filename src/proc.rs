@@ -238,7 +238,7 @@ pub unsafe fn switch_context(old_proc: &mut Process, new_proc: &mut Process) {
 /// Actually do the inner context switch
 ///
 /// # Safety
-/// `old_sp` and `new_sp` must be references to [`Process::sp`] fields which are properly set up.
+/// `old_sp` and `new_sp` must be references to [`ProcessInner::sp`] fields which are properly set up.
 #[unsafe(naked)]
 unsafe extern "C" fn switch_context_inner(old_sp: &mut *mut (), new_sp: &mut *mut ()) {
     core::arch::naked_asm!(

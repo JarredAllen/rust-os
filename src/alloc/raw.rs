@@ -1,6 +1,6 @@
 //! An allocator implementation.
 //!
-//! See [`ALLOCATOR`] for details on the global allocator.
+//! See [`KAllocator`] for details on the global allocator.
 
 use core::{alloc::GlobalAlloc, ptr::NonNull};
 

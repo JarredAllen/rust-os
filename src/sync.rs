@@ -16,7 +16,7 @@ pub struct KSpinLock<T: ?Sized> {
 }
 #[expect(dead_code, reason = "I'll use this eventually")]
 impl<T> KSpinLock<T> {
-    /// Construct a [`Mutex`] to wrap the given value.
+    /// Construct a [`KSpinLock`] to wrap the given value.
     pub const fn new(value: T) -> Self {
         Self {
             flag: AtomicBool::new(false),
