@@ -1,4 +1,4 @@
-use crate::{error::Result, resource_desc::ResourceDescriptor};
+use crate::{error::Result, proc::ResourceDescriptor, resource_desc::ResourceDescription};
 
 const PUT_CHAR_NUM: u32 = shared::Syscall::PutChar as u32;
 const GET_CHAR_NUM: u32 = shared::Syscall::GetChar as u32;
@@ -80,14 +80,9 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             let desc_num = frame.a1;
             assert!(desc_num < crate::proc::MAX_NUM_RESOURCE_DESCRIPTORS as u32);
             let proc = unsafe { crate::proc::current_proc() };
-            let desc = unsafe {
-                &mut *proc
-                    .resource_descriptors
-                    .cast::<crate::resource_desc::ResourceDescriptor>()
-                    .wrapping_add(desc_num as usize)
-            };
-            assert!(desc.present());
-            desc.close();
+            let desc = &mut unsafe { &mut *proc.resource_descriptors }[desc_num as usize];
+            assert!(desc.is_some());
+            *desc = None;
         }
         READ_NUM => {
             let desc_num = frame.a1;
@@ -149,7 +144,7 @@ fn syscall_open(path_name: &[u8]) -> Result<usize> {
     let (desc_num, slot) = unsafe { &mut *proc.resource_descriptors }
         .iter_mut()
         .enumerate()
-        .find(|(_, slot)| !slot.present())
+        .find(|(_, slot)| slot.is_none())
         .ok_or(shared::ErrorKind::LimitReached)?;
     // Initialize the slot
     let inode_num = crate::DEVICE_TREE
@@ -159,36 +154,32 @@ fn syscall_open(path_name: &[u8]) -> Result<usize> {
         .unwrap()
         .lookup_path(path_name.split('/'))
         .ok_or(shared::ErrorKind::NotFound)?;
-    *slot = ResourceDescriptor::for_file(crate::resource_desc::FileResourceDescriptorData {
-        flags: crate::resource_desc::FileFlags::NEW_READ_ONLY,
-        offset: 0,
-        inode_num,
-    });
+    *slot = Some(ResourceDescriptor::new(ResourceDescription::for_file(
+        crate::resource_desc::FileResourceDescriptionData {
+            flags: crate::resource_desc::FileFlags::NEW_READ_ONLY,
+            offset: 0,
+            inode_num,
+        },
+    ))?);
     Ok(desc_num)
 }
 
 fn syscall_read(desc_num: u32, user_buf: &mut [u8]) -> Result<usize> {
     let _allow = crate::csr::AllowUserModeMemory::allow();
     let proc = unsafe { crate::proc::current_proc() };
-    let desc = unsafe {
-        &mut *proc
-            .resource_descriptors
-            .cast::<crate::resource_desc::ResourceDescriptor>()
-            .wrapping_add(desc_num as usize)
-    };
-    Ok(desc.read(user_buf))
+    let desc = unsafe { &mut *proc.resource_descriptors }[desc_num as usize]
+        .as_ref()
+        .unwrap();
+    Ok(desc.description().read(user_buf))
 }
 
 fn syscall_write(desc_num: u32, user_buf: &[u8]) -> Result<usize> {
     let _allow = crate::csr::AllowUserModeMemory::allow();
     let proc = unsafe { crate::proc::current_proc() };
-    let desc = unsafe {
-        &mut *proc
-            .resource_descriptors
-            .cast::<crate::resource_desc::ResourceDescriptor>()
-            .wrapping_add(desc_num as usize)
-    };
-    Ok(desc.write(user_buf))
+    let desc = unsafe { &mut *proc.resource_descriptors }[desc_num as usize]
+        .as_ref()
+        .unwrap();
+    Ok(desc.description().write(user_buf))
 }
 
 fn syscall_mmap(alloc_size: u32) -> Result<usize> {

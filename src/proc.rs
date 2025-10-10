@@ -3,9 +3,11 @@ use core::sync::atomic::{AtomicU32, AtomicUsize};
 use util::cell::SyncUnsafeCell;
 
 use crate::{
-    error::Result,
-    page_table::{PageTableFlags, PhysicalAddress},
-    resource_desc::ResourceDescriptor,
+    alloc::KrcBox,
+    error::{OutOfMemory, Result},
+    page_table::{PageTableFlags, PhysicalAddress, PAGE_SIZE},
+    resource_desc::ResourceDescription,
+    sync::KSpinLock,
 };
 
 const KERNEL_STACK_SIZE: usize = 4096;
@@ -63,7 +65,7 @@ pub(crate) struct ProcessInner {
     pub sp: *mut (),
     pub page_table: PhysicalAddress,
     pub kernel_stack: *mut [u8; KERNEL_STACK_SIZE],
-    pub resource_descriptors: *mut [ResourceDescriptor; MAX_NUM_RESOURCE_DESCRIPTORS],
+    pub resource_descriptors: *mut [Option<ResourceDescriptor>; MAX_NUM_RESOURCE_DESCRIPTORS],
     pub mmap_head: usize,
 }
 
@@ -98,11 +100,13 @@ impl ProcessInner {
                 USER_PAGE_FLAGS,
             )
         }?;
-        let resource_descriptors = crate::alloc::alloc_pages(1)?
-            .cast::<[ResourceDescriptor; MAX_NUM_RESOURCE_DESCRIPTORS]>();
+        let resource_descriptors = crate::alloc::alloc_pages(
+            (MAX_NUM_RESOURCE_DESCRIPTORS * core::mem::size_of::<Option<ResourceDescriptor>>())
+                .div_ceil(PAGE_SIZE),
+        )?
+        .cast::<[Option<ResourceDescriptor>; MAX_NUM_RESOURCE_DESCRIPTORS]>();
         unsafe {
-            resource_descriptors
-                .write([const { ResourceDescriptor::null() }; MAX_NUM_RESOURCE_DESCRIPTORS]);
+            resource_descriptors.write([const { None }; MAX_NUM_RESOURCE_DESCRIPTORS]);
         }
         Ok(Self {
             // TODO Don't collide with pre-existing processes if it wraps.
@@ -120,8 +124,26 @@ impl ProcessInner {
 unsafe impl Send for ProcessInner {}
 unsafe impl Sync for ProcessInner {}
 
-pub(crate) const MAX_NUM_RESOURCE_DESCRIPTORS: usize =
-    crate::page_table::PAGE_SIZE / core::mem::size_of::<ResourceDescriptor>();
+pub(crate) const MAX_NUM_RESOURCE_DESCRIPTORS: usize = 1024;
+
+/// A resource descriptor that a process might have.
+#[repr(transparent)]
+pub struct ResourceDescriptor {
+    /// The inner description.
+    description: KrcBox<KSpinLock<ResourceDescription>>,
+}
+impl ResourceDescriptor {
+    pub fn new(description: ResourceDescription) -> Result<Self, OutOfMemory> {
+        Ok(Self {
+            description: KrcBox::new(KSpinLock::new(description))?,
+        })
+    }
+
+    /// Get access to the underlying resource description this value points at.
+    pub fn description(&self) -> impl core::ops::DerefMut<Target = ResourceDescription> + use<'_> {
+        self.description.lock()
+    }
+}
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum ProcessState {
