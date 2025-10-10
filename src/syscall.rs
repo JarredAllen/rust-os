@@ -1,4 +1,7 @@
-use crate::{error::Result, proc::ResourceDescriptor, resource_desc::ResourceDescription};
+use crate::{
+    error::Result, page_table::PAGE_SIZE, proc::ResourceDescriptor,
+    resource_desc::ResourceDescription,
+};
 
 const PUT_CHAR_NUM: u32 = shared::Syscall::PutChar as u32;
 const GET_CHAR_NUM: u32 = shared::Syscall::GetChar as u32;
@@ -45,6 +48,21 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             let current_proc = unsafe { crate::proc::current_proc() };
             log::info!("Process {} exited", current_proc.pid);
             current_proc.state = crate::proc::ProcessState::Exited;
+            unsafe {
+                crate::alloc::free_pages(
+                    current_proc.kernel_stack.cast(),
+                    crate::proc::KERNEL_STACK_SIZE.div_ceil(4096),
+                )
+            };
+            unsafe { current_proc.resource_descriptors.drop_in_place() };
+            unsafe {
+                crate::alloc::free_pages(
+                    current_proc.resource_descriptors.cast(),
+                    (crate::proc::MAX_NUM_RESOURCE_DESCRIPTORS
+                        * core::mem::size_of::<Option<ResourceDescriptor>>())
+                    .div_ceil(PAGE_SIZE),
+                )
+            };
             crate::proc::sched_yield();
         }
         GET_RANDOM_NUM => {

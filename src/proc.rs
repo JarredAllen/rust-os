@@ -10,7 +10,7 @@ use crate::{
     sync::KSpinLock,
 };
 
-const KERNEL_STACK_SIZE: usize = 4096;
+pub(crate) const KERNEL_STACK_SIZE: usize = 4096;
 const MAX_PROCS: usize = 8;
 
 const USER_BASE: u32 = 0x0100_0000;

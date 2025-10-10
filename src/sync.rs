@@ -2,6 +2,8 @@
 
 use core::{
     cell::UnsafeCell,
+    mem::MaybeUninit,
+    ops::Deref,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -105,3 +107,73 @@ impl<T: ?Sized> Drop for KSpinLockGuard<'_, T> {
         self.flag.store(false, Ordering::Release);
     }
 }
+
+pub struct LazyLock<T, F = fn() -> T> {
+    value: UnsafeCell<MaybeUninit<T>>,
+    init_func: UnsafeCell<MaybeUninit<F>>,
+    started: AtomicBool,
+    finished: AtomicBool,
+}
+impl<T, F> LazyLock<T, F> {
+    pub const fn new(f: F) -> Self {
+        Self {
+            value: UnsafeCell::new(MaybeUninit::uninit()),
+            init_func: UnsafeCell::new(MaybeUninit::new(f)),
+            started: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+        }
+    }
+
+    pub fn force(&self) -> &T
+    where
+        F: FnOnce() -> T,
+        T: core::fmt::Debug,
+    {
+        if self.finished.load(Ordering::Acquire) {
+            let value = unsafe { &*self.value.get() };
+            unsafe { value.assume_init_ref() }
+        } else {
+            if self.started.swap(true, Ordering::AcqRel) {
+                panic!("TODO Deconflict concurrent initialization attempts");
+            }
+            let init_func = unsafe { self.init_func.get().read() };
+            let value =
+                unsafe { &mut *self.value.get() }.write(unsafe { init_func.assume_init() }());
+            self.finished.store(true, Ordering::Release);
+            value
+        }
+    }
+}
+impl<T, F> Deref for LazyLock<T, F>
+where
+    F: FnOnce() -> T,
+    T: core::fmt::Debug,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.force()
+    }
+}
+impl<T, F> Drop for LazyLock<T, F> {
+    fn drop(&mut self) {
+        let started = self.started.load(Ordering::Acquire);
+        let finished = self.started.load(Ordering::Acquire);
+        match (started, finished) {
+            (false, false) => {
+                let init_func = unsafe { &mut *self.init_func.get() };
+                unsafe { init_func.assume_init_drop() };
+            }
+            (true, true) => {
+                let value = unsafe { &mut *self.value.get() };
+                unsafe { value.assume_init_drop() };
+            }
+            _ => {
+                unreachable!("dropping lazy lock but started != finished");
+            }
+        }
+    }
+}
+
+unsafe impl<T: Sync, F: Send> Sync for LazyLock<T, F> {}
+unsafe impl<T: Send, F: Send> Send for LazyLock<T, F> {}
