@@ -1,3 +1,5 @@
+//! A shell implementation for this userspace.
+
 #![no_std]
 #![no_main]
 
@@ -6,7 +8,7 @@ extern crate alloc;
 use userlib::{fs::File, prelude::*};
 
 #[unsafe(no_mangle)]
-fn main() {
+extern "Rust" fn main() {
     let mut line_buf = alloc::vec::Vec::<u8>::new();
     print!("> ");
     loop {
@@ -34,7 +36,7 @@ fn main() {
                         let len = cmd_parts
                             .next()
                             .map_or(16, |s| s.parse().expect("Invalid number"));
-                        let mut buf = alloc::vec![0u8; len];
+                        let mut buf = alloc::vec![0_u8; len];
                         userlib::sys::get_random(&mut buf);
                         for byte in buf {
                             print!("{byte:02X}");

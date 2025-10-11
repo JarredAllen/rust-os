@@ -20,7 +20,7 @@ pub struct VirtioBlock<'a> {
     /// The underlying virtio implementation.
     virtio: Virtio<'a, 1>,
 }
-impl<'a> VirtioBlock<'a> {
+impl VirtioBlock<'_> {
     /// Initialize at the address the device appears at in kernel memory.
     ///
     /// # Safety
@@ -28,13 +28,18 @@ impl<'a> VirtioBlock<'a> {
     /// this memory.
     pub unsafe fn init_kernel_address() -> Result<Self> {
         log::info!("Initializing virtio block device");
+        // SAFETY: By method precondition, we can take ownership of this memory.
         let mut virtio = unsafe {
             Virtio::init_for_pointers(core::ptr::with_exposed_provenance_mut(BLOCK_DEVICE_ADDRESS))
         };
-        assert_eq!(virtio.read_register(reg::DeviceId), 2);
+        if virtio.read_register(reg::DeviceId) != 2 {
+            // It wasn't a block device we know about.
+            return Err(ErrorKind::Unsupported.into());
+        }
+        // SAFETY: Newly-allocated memory can get exclusive access.
         let queue = unsafe {
             &mut *crate::alloc::alloc_pages_zeroed(
-                core::mem::size_of::<VirtQueue>().div_ceil(crate::page_table::PAGE_SIZE),
+                size_of::<VirtQueue>().div_ceil(crate::page_table::PAGE_SIZE),
             )?
             .cast::<MaybeUninit<VirtQueue>>()
         };
@@ -52,15 +57,17 @@ impl<'a> VirtioBlock<'a> {
             .wrapping_byte_add(core::mem::offset_of!(VirtQueue, descriptor))
             .cast::<VirtQueueDescriptor>();
         // Descriptor 0: Device-read-only header
+        // SAFETY: We have exclusive access to the queue, so we can write to it.
         unsafe {
             desc.write_volatile(VirtQueueDescriptor {
                 address: core::ptr::from_mut(request).addr() as u64,
                 length: core::mem::offset_of!(BlockRequest, data) as u32,
                 flags: DescriptorFlags::NEXT,
                 next: 1,
-            })
-        };
+            });
+        }
         // Descriptor 1: The data (may be read or written)
+        // SAFETY: We have exclusive access to the queue, so we can write to it.
         unsafe {
             desc.wrapping_add(1).write_volatile(VirtQueueDescriptor {
                 address: core::ptr::from_mut(request).addr() as u64
@@ -76,9 +83,10 @@ impl<'a> VirtioBlock<'a> {
                     }
                 },
                 next: 2,
-            })
-        };
+            });
+        }
         // Descriptor 2: The status byte (device-written)
+        // SAFETY: We have exclusive access to the queue, so we can write to it.
         unsafe {
             desc.wrapping_add(2).write_volatile(VirtQueueDescriptor {
                 address: core::ptr::from_mut(request).addr() as u64
@@ -87,8 +95,8 @@ impl<'a> VirtioBlock<'a> {
                 flags: DescriptorFlags::WRITE,
 
                 next: 0,
-            })
-        };
+            });
+        }
 
         // SAFETY:
         // The descriptors point to non-overlapping sections of `request`, which we have an
@@ -136,7 +144,7 @@ impl<'a> VirtioBlock<'a> {
 pub struct VirtioRandom<'a> {
     virtio: Virtio<'a, 1>,
 }
-impl<'a> VirtioRandom<'a> {
+impl VirtioRandom<'_> {
     /// Initialize at the address the device appears at in kernel memory.
     ///
     /// # Safety
@@ -144,13 +152,18 @@ impl<'a> VirtioRandom<'a> {
     /// this memory.
     pub unsafe fn init_kernel_address() -> Result<Self> {
         log::info!("Initializing virtio random device");
+        // SAFETY: By method precondition, we can take ownership of this memory.
         let mut virtio = unsafe {
             Virtio::init_for_pointers(core::ptr::with_exposed_provenance_mut(RNG_DEVICE_ADDRESS))
         };
-        assert_eq!(virtio.read_register(reg::DeviceId), 4);
+        if virtio.read_register(reg::DeviceId) != 4 {
+            // It wasn't a random device we know about.
+            return Err(ErrorKind::Unsupported.into());
+        }
+        // SAFETY: Newly-allocated memory can get exclusive access.
         let queue = unsafe {
             &mut *crate::alloc::alloc_pages_zeroed(
-                core::mem::size_of::<VirtQueue>().div_ceil(crate::page_table::PAGE_SIZE),
+                size_of::<VirtQueue>().div_ceil(crate::page_table::PAGE_SIZE),
             )?
             .cast::<MaybeUninit<VirtQueue>>()
         };
@@ -163,30 +176,32 @@ impl<'a> VirtioRandom<'a> {
     /// This function assumes the buffer is in kernel memory (i.e. the physical and virtual
     /// addresses are the same).
     pub fn read_random(&mut self, mut buf: &mut [u8]) -> Result<()> {
+        #![expect(
+            clippy::unwrap_in_result,
+            reason = "should be initialized in constructor"
+        )]
         const MAX_NUM_ITERS: u8 = 128;
         let mut num_iters = 0;
         loop {
             num_iters += 1;
             if num_iters > MAX_NUM_ITERS {
                 log::error!("Entropy device didn't make random data on time");
-                return Err(crate::error::ErrorKind::Io.into());
+                return Err(ErrorKind::Io.into());
             }
-            // Each descriptor can only be read-only or write-only, so we need to split into multiple
-            // parts.
             let desc = self.virtio.queues[0]
                 .unwrap()
                 .as_ptr()
                 .wrapping_byte_add(core::mem::offset_of!(VirtQueue, descriptor))
                 .cast::<VirtQueueDescriptor>();
-            // Descriptor 0: Device-read-only header
+            // SAFETY: We have exclusive access, so we can write to the queue.
             unsafe {
                 desc.write_volatile(VirtQueueDescriptor {
                     address: crate::page_table::paddr_for_vaddr(core::ptr::from_mut(buf)).0 as u64,
                     length: buf.len() as u32,
                     flags: DescriptorFlags::WRITE,
                     next: 0,
-                })
-            };
+                });
+            }
             // SAFETY:
             // The descriptors point to non-overlapping sections of `request`, which we have an
             // exclusive reference to.
@@ -271,11 +286,12 @@ impl<'a, const NUM_QUEUES: usize> Virtio<'a, NUM_QUEUES> {
             .regs
             .wrapping_byte_add(Register::OFFSET)
             .cast::<Register::RegTy>();
+        // SAFETY: We have shared access to the memory, so we can read.
         unsafe { reg_ptr.read_volatile() }
     }
 
     fn write_register<Register: VirtioBlockRegister>(
-        &self,
+        &mut self,
         _register: Register,
         value: Register::RegTy,
     ) {
@@ -284,6 +300,7 @@ impl<'a, const NUM_QUEUES: usize> Virtio<'a, NUM_QUEUES> {
             .regs
             .wrapping_byte_add(Register::OFFSET)
             .cast::<Register::RegTy>();
+        // SAFETY: We have exclusive access to the memory, so we can write.
         unsafe { reg_ptr.write_volatile(value) }
     }
 
@@ -304,7 +321,7 @@ impl<'a, const NUM_QUEUES: usize> Virtio<'a, NUM_QUEUES> {
         // 4. Read the device feature bits, and write the subset that we understand.
 
         // First check that the device is what we expect.
-        assert_eq!(self.read_register(reg::Magic), 0x74726976);
+        assert_eq!(self.read_register(reg::Magic), 0x7472_6976);
         assert_eq!(self.read_register(reg::Version), 1);
 
         // Then read the features, check that we support them, and write them back.
@@ -356,6 +373,8 @@ impl<'a, const NUM_QUEUES: usize> Virtio<'a, NUM_QUEUES> {
     ) -> VirtQueueUsedElement {
         let queue = self.queues[queue_num as usize].unwrap().as_ptr();
         // Reference the descriptors in the queue.
+        //
+        // SAFETY: We have exclusive access, so we can write to the queue.
         let available = unsafe {
             &mut *queue
                 .wrapping_byte_add(core::mem::offset_of!(VirtQueue, available))
@@ -365,12 +384,15 @@ impl<'a, const NUM_QUEUES: usize> Virtio<'a, NUM_QUEUES> {
         let available_idx = queue
             .wrapping_byte_add(core::mem::offset_of!(VirtQueue, available.index))
             .cast::<u16>();
+        // SAFETY: We have exclusive access, so we can write to the queue.
         let idx = unsafe { available_idx.read_volatile() };
         let available_slot = queue
             .wrapping_byte_add(core::mem::offset_of!(VirtQueue, available.ring))
             .cast::<u16>()
             .wrapping_add(idx as usize % QUEUE_SIZE);
+        // SAFETY: We have exclusive access, so we can write to the queue.
         unsafe { available_slot.write_volatile(0) };
+        // SAFETY: We have exclusive access, so we can write to the queue.
         unsafe { available_idx.write_volatile(idx.wrapping_add(1)) };
 
         // Use a fence to ensure we set up the queue before sending the notification
@@ -383,6 +405,7 @@ impl<'a, const NUM_QUEUES: usize> Virtio<'a, NUM_QUEUES> {
         while self.queue_busy(queue_num) {
             core::hint::spin_loop();
         }
+        // SAFETY: We have exclusive access over the queue.
         let used_idx = unsafe {
             queue
                 .wrapping_byte_add(core::mem::offset_of!(VirtQueue, used.index))
@@ -394,18 +417,22 @@ impl<'a, const NUM_QUEUES: usize> Virtio<'a, NUM_QUEUES> {
             .wrapping_byte_add(core::mem::offset_of!(VirtQueue, used.ring))
             .cast::<VirtQueueUsedElement>()
             .wrapping_add(used_idx);
+        // SAFETY:
+        // This queue element was just written, and we have exclusive access over the queue.
         unsafe { queue_elem.read_volatile() }
     }
 
     /// Returns `true` if the device is processing elements in the queue.
     fn queue_busy(&self, queue_num: u32) -> bool {
         let queue = self.queues[queue_num as usize].unwrap().as_ptr();
+        // SAFETY: Shared access lets us read the queue.
         let available_idx = unsafe {
             queue
                 .wrapping_byte_add(core::mem::offset_of!(VirtQueue, available.index))
                 .cast::<u16>()
                 .read_volatile()
         };
+        // SAFETY: Shared access lets us read the queue.
         let used_idx = unsafe {
             queue
                 .wrapping_byte_add(core::mem::offset_of!(VirtQueue, used.index))
@@ -416,7 +443,9 @@ impl<'a, const NUM_QUEUES: usize> Virtio<'a, NUM_QUEUES> {
     }
 }
 
+// SAFETY: The device uses shared/exclusive references to force synchronization.
 unsafe impl<const NUM_QUEUES: usize> Send for Virtio<'_, NUM_QUEUES> {}
+// SAFETY: The device uses shared/exclusive references to force synchronization.
 unsafe impl<const NUM_QUEUES: usize> Sync for Virtio<'_, NUM_QUEUES> {}
 
 /// A register for a virtio block device.

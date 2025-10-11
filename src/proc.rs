@@ -1,5 +1,6 @@
 use core::sync::atomic::{AtomicU32, AtomicUsize};
 
+use shared::ErrorKind;
 use util::cell::SyncUnsafeCell;
 
 use crate::{
@@ -35,12 +36,14 @@ static PROCS_BUF: [SyncUnsafeCell<ProcessInner>; MAX_PROCS] = [const {
 
 impl Process {
     pub fn create_process(image: &[u8]) -> Result<Self> {
-        let Some((buf_idx, slot)) = PROCS_BUF.iter().enumerate().find(|(_, slot)| {
-            let slot = unsafe { &*slot.get() };
-            slot.state == ProcessState::Unused
-        }) else {
-            panic!("Out of space for processes");
-        };
+        let (buf_idx, slot) = PROCS_BUF
+            .iter()
+            .enumerate()
+            .find(|(_, slot)| {
+                let slot = unsafe { &*slot.get() };
+                slot.state == ProcessState::Unused
+            })
+            .ok_or(ErrorKind::LimitReached)?;
         unsafe { slot.get().write(ProcessInner::create_process(image)?) };
         Ok(Process { buf_idx })
     }
@@ -82,10 +85,18 @@ impl ProcessInner {
             .cast::<()>();
         {
             let pc_ptr = sp.cast::<usize>();
-            assert!(pc_ptr.is_aligned(), "Stack misaligned");
-            unsafe { pc_ptr.write(user_entry as usize) };
+            debug_assert!(pc_ptr.is_aligned(), "Stack misaligned");
+            #[allow(
+                clippy::fn_to_numeric_cast_any,
+                reason = "I really want the function address"
+            )]
+            unsafe {
+                pc_ptr.write(user_entry as usize)
+            };
         }
-        let page_table = core::ptr::NonNull::new(crate::alloc::alloc_pages(1)?).unwrap();
+        let page_table =
+            // SAFETY: Pages will never be null.
+            unsafe { core::ptr::NonNull::new_unchecked(crate::alloc::alloc_pages(1)?) };
         unsafe { crate::page_table::map_kernel_memory(page_table.cast()) }?;
         const USER_PAGE_FLAGS: PageTableFlags = PageTableFlags::VALID
             .bit_or(PageTableFlags::READABLE)
@@ -101,7 +112,7 @@ impl ProcessInner {
             )
         }?;
         let resource_descriptors = crate::alloc::alloc_pages(
-            (MAX_NUM_RESOURCE_DESCRIPTORS * core::mem::size_of::<Option<ResourceDescriptor>>())
+            (MAX_NUM_RESOURCE_DESCRIPTORS * size_of::<Option<ResourceDescriptor>>())
                 .div_ceil(PAGE_SIZE),
         )?
         .cast::<[Option<ResourceDescriptor>; MAX_NUM_RESOURCE_DESCRIPTORS]>();
@@ -117,7 +128,7 @@ impl ProcessInner {
             page_table: PhysicalAddress(page_table.addr().into()),
             kernel_stack,
             resource_descriptors,
-            mmap_head: 0x02000000,
+            mmap_head: 0x0200_0000,
         })
     }
 }
@@ -179,7 +190,7 @@ fn next_proc_to_run(current_proc: &Process) -> usize {
         proc.state == ProcessState::Idle
     }) {
         return next_proc_slot;
-    };
+    }
     todo!("Nothing runnable right now");
 }
 

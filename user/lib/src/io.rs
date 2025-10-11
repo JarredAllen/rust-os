@@ -25,10 +25,11 @@ macro_rules! println {
 }
 
 /// Temporary ownership over the standard output stream.
+#[must_use = "`Stdout` objects are only useful for writing to"]
 pub struct Stdout<'a> {
     phantom: PhantomData<&'a mut ()>,
 }
-impl<'a> Stdout<'a> {
+impl Stdout<'_> {
     /// Lock the standard output stream so writing can happen.
     ///
     /// If another copy of `Self` exists anywhere, this method will panic. See [`Self::try_lock`]

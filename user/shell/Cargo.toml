@@ -7,3 +7,6 @@ build = "../user-build.rs"
 [dependencies]
 hex-display.workspace = true
 userlib = { path = "../lib" }
+
+[lints]
+workspace = true

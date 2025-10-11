@@ -7,6 +7,8 @@
 /// to ensure that this call doesn't break the memory model.
 pub unsafe fn call(args: [u32; 6], fid: u32, eid: u32) -> Result<u32> {
     let value: i32;
+    // SAFETY:
+    // By method precondition, thus SBI call is safe to do here.
     unsafe {
         core::arch::asm!(
             "ecall",
@@ -19,8 +21,8 @@ pub unsafe fn call(args: [u32; 6], fid: u32, eid: u32) -> Result<u32> {
             in("a6") fid,
             in("a7") eid,
             lateout("a0") value,
-        )
-    };
+        );
+    }
     // TODO Legacy functions always return only one value in a0.
     if value < 0 {
         Err(Error::for_reg_value(value).unwrap())
@@ -30,11 +32,13 @@ pub unsafe fn call(args: [u32; 6], fid: u32, eid: u32) -> Result<u32> {
 }
 
 pub fn putchar(c: char) -> Result<()> {
+    // SAFETY: These args are for `PutChar`, which is valid to call here.
     unsafe { call([c as u32, 0, 0, 0, 0, 0], 0, 1)? };
     Ok(())
 }
 
 pub fn getchar() -> Result<Option<core::num::NonZero<char>>> {
+    // SAFETY: These args are for `GetChar`, which is valid to call here.
     let c = unsafe { call([0; 6], 0, 2) }?;
     Ok(char::from_u32(c).and_then(core::num::NonZero::new))
 }
@@ -43,7 +47,7 @@ pub fn getchar() -> Result<Option<core::num::NonZero<char>>> {
 pub struct SbiPutcharWriter;
 impl core::fmt::Write for SbiPutcharWriter {
     fn write_char(&mut self, c: char) -> core::fmt::Result {
-        crate::sbi::putchar(c).map_err(|_| core::fmt::Error)
+        putchar(c).map_err(|_| core::fmt::Error)
     }
 
     fn write_str(&mut self, s: &str) -> core::fmt::Result {

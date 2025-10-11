@@ -20,8 +20,8 @@ unsafe extern "C" {
 ///
 /// 1024 entries in 32-bit mode.
 const PAGE_TABLE_LEGNTH: usize = {
-    let len = PAGE_SIZE / core::mem::size_of::<PageTableEntry>();
-    assert!(len * core::mem::size_of::<PageTableEntry>() == PAGE_SIZE);
+    let len = PAGE_SIZE / size_of::<PageTableEntry>();
+    assert!(len * size_of::<PageTableEntry>() == PAGE_SIZE);
     len
 };
 
@@ -82,15 +82,32 @@ impl PhysicalAddress {
 }
 
 bitset::bitset!(
+    /// The flags on a [`PageTableEntry`].
     pub PageTableFlags(usize) {
+        /// The page is valid.
         Valid = 0,
+        /// The page is readable.
         Readable = 1,
+        /// The page is writable.
         Writable = 2,
+        /// The page is executable.
         Executable = 3,
+        /// User-mode code should have access to this page.
+        ///
+        /// If the `SUM` bit isn't set, then this bit denies the kernel access to it (see
+        /// [`crate::csr::AllowUserModeMemory`] for more details).
         UserAccessible = 4,
     }
 );
 
+/// Map kernel memory into the given page table.
+///
+/// # Safety
+/// This writes to the given page table, which must not interfere with rust's understanding of
+/// memory.
+///
+/// Also, because this method is in the memory that it maps itself into, you really should call
+/// this method on a page table before setting it to be active.
 pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) -> Result<(), OutOfMemory> {
     /// The flags to use for kernel memory allocations.
     ///
@@ -103,6 +120,7 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) -> Result<(), OutOfMe
         ..core::ptr::addr_of_mut!(__free_ram_end).addr())
         .step_by(PAGE_SIZE)
     {
+        // SAFETY: Outer method preconditions match inner method's.
         unsafe {
             map_page(
                 table,
@@ -113,6 +131,7 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) -> Result<(), OutOfMe
         }?;
     }
     // Map the virtio block device
+    // SAFETY: Outer method preconditions match inner method's.
     unsafe {
         map_page(
             table,
@@ -122,6 +141,7 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) -> Result<(), OutOfMe
         )
     }?;
     // Map the virtio entropy device
+    // SAFETY: Outer method preconditions match inner method's.
     unsafe {
         map_page(
             table,
@@ -150,6 +170,7 @@ pub unsafe fn alloc_and_map_slice(
             .step_by(PAGE_SIZE)
             .zip(data.chunks(PAGE_SIZE)),
     ) {
+        // SAFETY: Outer method preconditions match inner method's.
         unsafe {
             map_page(
                 table,
@@ -169,6 +190,8 @@ pub unsafe fn alloc_and_map_slice(
 #[inline(never)]
 pub fn paddr_for_vaddr<T: ?Sized>(vaddr: *mut T) -> PhysicalAddress {
     if let Some(page_table) = crate::csr::current_page_table() {
+        // TODO Handle virtual addresses that aren't mapped.
+        // TODO Handle large pages.
         let vaddr = vaddr.addr();
         let vpn1 = (vaddr >> 22) & 0x3ff;
         let vpn2 = (vaddr >> 12) & 0x3ff;
@@ -178,6 +201,8 @@ pub fn paddr_for_vaddr<T: ?Sized>(vaddr: *mut T) -> PhysicalAddress {
                 .physical_addr()
                 .0,
         );
+        // SAFETY:
+        // If `current_page_table` isn't a valid page table, we've already had bigger problems.
         let entry = unsafe { &*table0 }.entries[vpn2];
         entry.physical_addr().byte_add(offset_in_page)
     } else {
@@ -185,12 +210,19 @@ pub fn paddr_for_vaddr<T: ?Sized>(vaddr: *mut T) -> PhysicalAddress {
     }
 }
 
+/// Map the given page into the given page table at the given virtual address.
+///
+/// # Safety
+/// We must have exclusive access to the given table, which must be initialized as a valid page
+/// table structure. Also, the result of performing this mapping must not cause issues with Rust's
+/// memory model.
 pub unsafe fn map_page(
     mut table: NonNull<PageTable>,
     vaddr: *mut (),
     paddr: PhysicalAddress,
     flags: PageTableFlags,
 ) -> Result<(), OutOfMemory> {
+    #![expect(clippy::panic_in_result_fn, reason = "Checking for bugs")]
     assert!(
         paddr.is_aligned(PAGE_SIZE),
         "Unaligned physical address 0x{:X}",
@@ -204,6 +236,7 @@ pub unsafe fn map_page(
 
     let vpn1 = (vaddr.addr() >> 22) & 0x3ff;
 
+    // SAFETY: Method precondition ensures valid access.
     let table = unsafe { table.as_mut() };
     if !table.entries[vpn1].flags().valid() {
         let new_page = crate::alloc::alloc_pages(1)?;
@@ -211,12 +244,14 @@ pub unsafe fn map_page(
             PhysicalAddress(new_page.addr()),
             PageTableFlags::VALID,
         );
+        // SAFETY: Method precondition ensures valid access.
         unsafe {
             new_page.cast::<PageTable>().write(PageTable {
                 entries: [PageTableEntry::EMPTY; PAGE_TABLE_LEGNTH],
-            })
-        };
+            });
+        }
     }
+    // SAFETY: Method precondition ensures valid access.
     let table0 = unsafe {
         &mut *core::ptr::with_exposed_provenance_mut::<PageTable>(
             table.entries[vpn1].physical_addr().0,

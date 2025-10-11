@@ -17,7 +17,10 @@ impl KByteBuf {
         if length == 0 {
             return Ok(Self::new());
         }
-        let layout = core::alloc::Layout::from_size_align(length, Self::BUFFER_ALIGN).unwrap();
+        let layout = core::alloc::Layout::from_size_align(length, Self::BUFFER_ALIGN)
+            // If this returns an error, then `length` rounded up by `Self::BUFFER_ALIGN` is bigger
+            // than `isize::MAX`, which is a bigger allocation than we should hand out.
+            .map_err(|_| OutOfMemory)?;
         let buf = super::ALLOCATOR.allocate_inner(layout)?;
         // SAFETY: Newly-allocated memory is known to be safe for writing.
         unsafe { buf.cast::<u8>().write_bytes(0, length) };
@@ -40,7 +43,7 @@ impl KByteBuf {
         self.buf.as_ptr().cast()
     }
 }
-impl core::ops::Deref for KByteBuf {
+impl Deref for KByteBuf {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         // SAFETY:
@@ -55,15 +58,14 @@ impl core::ops::DerefMut for KByteBuf {
         unsafe { self.buf.as_mut() }
     }
 }
-impl core::convert::AsRef<[u8]> for KByteBuf {
+impl AsRef<[u8]> for KByteBuf {
     fn as_ref(&self) -> &[u8] {
-        self.deref()
+        self
     }
 }
-impl core::convert::AsMut<[u8]> for KByteBuf {
+impl AsMut<[u8]> for KByteBuf {
     fn as_mut(&mut self) -> &mut [u8] {
-        use core::ops::DerefMut;
-        self.deref_mut()
+        self
     }
 }
 impl Drop for KByteBuf {
@@ -77,5 +79,7 @@ impl Drop for KByteBuf {
         }
     }
 }
+// SAFETY: Raw bytes are always sendable.
 unsafe impl Send for KByteBuf {}
+// SAFETY: Raw bytes are always shareable.
 unsafe impl Sync for KByteBuf {}

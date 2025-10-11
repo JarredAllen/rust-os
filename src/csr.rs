@@ -30,8 +30,15 @@ macro_rules! write_csr {
 pub(crate) use {read_csr, write_csr};
 
 /// Write the satp csr to set the page table.
+///
+/// # Safety
+/// It is on the caller to ensure that switching to the newly-active page table will not cause any
+/// problems.
 pub unsafe fn set_page_table(page_table_addr: PhysicalAddress) {
     assert!(page_table_addr.is_aligned(crate::page_table::PAGE_SIZE));
+    // SAFETY:
+    // This sets the page table to the user-given address, which must be valid by the method
+    // precondition.
     unsafe { write_csr!(satp = (page_table_addr.0 / crate::page_table::PAGE_SIZE) | (1 << 31)) };
 }
 
@@ -55,6 +62,8 @@ impl AllowUserModeMemory {
     /// Allow accessing user-mode memory until this value is dropped.
     pub fn allow() -> Self {
         let sstatus = read_csr!(sstatus);
+        // SAFETY:
+        // Writing the `SUM` bit is valid.
         unsafe { write_csr!(sstatus = sstatus | 1 << 18) };
         Self { _marker: () }
     }
@@ -62,6 +71,8 @@ impl AllowUserModeMemory {
 impl Drop for AllowUserModeMemory {
     fn drop(&mut self) {
         let sstatus = read_csr!(sstatus);
+        // SAFETY:
+        // Writing the `SUM` bit is valid.
         unsafe { write_csr!(sstatus = sstatus & !(1 << 18)) };
     }
 }

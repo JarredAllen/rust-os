@@ -16,6 +16,9 @@ panic = "abort"
 [profile.release]
 panic = "abort"
 
+[lints]
+workspace = true
+
 
 [workspace]
 members = [".", "bitset", "shared", "user/lib", "user/shell", "util"]
@@ -24,3 +27,64 @@ members = [".", "bitset", "shared", "user/lib", "user/shell", "util"]
 hex-display = "0.3.0"
 log = "0.4.28"
 paste = "1.0"
+
+[workspace.lints.rust]
+macro_use_extern_crate = "warn"
+meta_variable_misuse = "warn"
+missing_docs = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+# Lint `pedantic` by default, but make an exception where I think it's too strict
+pedantic = { level = "warn", priority = -1 }
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+items_after_statements = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+wildcard_imports = "allow"
+# Pick the "restriction" lints we want to use
+allow_attributes_without_reason = "warn"
+as_pointer_underscore = "warn"
+as_underscore = "warn"
+clone_on_ref_ptr = "warn"
+dbg_macro = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_structs_with_brackets = "warn"
+exit = "warn"
+float_cmp_const = "warn"
+fn_to_numeric_cast_any = "warn"
+if_then_some_else_none = "warn"
+infinite_loop = "warn"
+lossy_float_literal = "warn"
+map_with_unused_argument_over_ranges = "warn"
+mixed_read_write_in_expression = "warn"
+mod_module_files = "warn"
+mutex_atomic = "warn"
+needless_raw_strings = "warn"
+panic_in_result_fn = "warn"
+pathbuf_init_then_push = "warn"
+pub_without_shorthand = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+renamed_function_params = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+string_lit_chars_any = "warn"
+string_to_string = "warn"
+suspicious_xor_used_as_pow = "warn"
+tests_outside_test_module = "warn"
+try_err = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_self_imports = "warn"
+unneeded_field_pattern = "warn"
+unseparated_literal_suffix = "warn"
+unused_result_ok = "warn"
+unused_trait_names = "warn"
+unwrap_in_result = "warn"

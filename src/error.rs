@@ -31,7 +31,7 @@ impl fmt::Display for OutOfMemory {
         f.write_str("Out of memory")
     }
 }
-impl core::error::Error for OutOfMemory {}
+impl error::Error for OutOfMemory {}
 impl From<OutOfMemory> for ErrorKind {
     fn from(OutOfMemory: OutOfMemory) -> Self {
         Self::OutOfMemory

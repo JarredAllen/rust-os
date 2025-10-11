@@ -1,3 +1,5 @@
+//! A build script for user binaries.
+
 use std::{env, fs, path::PathBuf};
 
 const LINKER_SCRIPT: &str = include_str!("./user.ld");

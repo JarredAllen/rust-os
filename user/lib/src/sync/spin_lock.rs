@@ -80,9 +80,9 @@ impl<T: Default> Default for SpinLock<T> {
 
 // UnsafeCell implements `Send` as appropriate, so we only need `Sync`.
 
-/// # Safety
-/// Sharing the mutex between threads corresponds to sending the value to whichever thread locks
-/// the mutex.
+// SAFETY:
+// Sharing the mutex between threads corresponds to sending the value to whichever thread locks
+// the mutex.
 unsafe impl<T: Send> Sync for SpinLock<T> {}
 
 /// An RAII guard for a [`SpinLock`].

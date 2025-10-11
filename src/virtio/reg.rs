@@ -57,6 +57,7 @@ macro_rules! register {
     )*) => {$(
         #[derive(Debug)]
         pub(super) struct $regname;
+        // SAFETY: Macro asserts that these are valid.
         unsafe impl VirtioBlockRegister for $regname {
             const OFFSET: usize = $regoffset;
             type RegTy = $regty;

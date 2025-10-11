@@ -19,16 +19,19 @@ impl ResourceDescription {
 
     /// Read from the given resource.
     pub fn read(&mut self, buf: &mut [u8]) -> usize {
+        // SAFETY: We keep the vtable and the value together to meet the precondition.
         unsafe { (self.vtable.read)(&mut self.data, buf) }
     }
 
     /// Write to the given resource.
     pub fn write(&mut self, buf: &[u8]) -> usize {
+        // SAFETY: We keep the vtable and the value together to meet the precondition.
         unsafe { (self.vtable.write)(&mut self.data, buf) }
     }
 
     /// Close the given resource.
     pub fn close(&mut self) {
+        // SAFETY: We keep the vtable and the value together to meet the precondition.
         unsafe { (self.vtable.close)(&mut self.data) }
     }
 }
@@ -50,7 +53,7 @@ impl FileFlags {
     pub const NEW_READ_ONLY: Self = Self::PRESENT.bit_or(Self::READABLE);
 }
 
-/// A VTable with methods for a [`ResourceDescription`].
+/// A `VTable` with methods for a [`ResourceDescription`].
 ///
 /// # Safety
 /// All of these functions are unsafe. They mut be fully-defined when called with a
@@ -91,16 +94,19 @@ impl RawResourceDescriptionVTable {
         }
         Self {
             read: |data, buf| {
+                // SAFETY: This can only be called if the data is a file.
                 let data = unsafe { &mut data.file };
                 file_read(data, buf)
             },
             write: |data, buf| {
+                // SAFETY: This can only be called if the data is a file.
                 let data = unsafe { &mut data.file };
                 file_write(data, buf)
             },
             close: |data| {
+                // SAFETY: This can only be called if the data is a file.
                 let data = unsafe { &mut data.file };
-                file_close(data)
+                file_close(data);
             },
         }
     };

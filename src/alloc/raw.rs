@@ -53,6 +53,8 @@ impl KAllocator {
         let Some((size_class, raw_size)) = class_for_size(size) else {
             let num_pages = size.div_ceil(PAGE_SIZE);
             return Ok(NonNull::slice_from_raw_parts(
+                // SAFETY:
+                // We won't get a null pointer from `alloc_pages`.
                 unsafe { NonNull::new_unchecked(super::alloc_pages(num_pages)?) }.cast(),
                 num_pages * PAGE_SIZE,
             ));
@@ -88,6 +90,7 @@ impl Default for KAllocator {
     }
 }
 
+// SAFETY: We must meet the conditions for the trait.
 unsafe impl GlobalAlloc for KAllocator {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
         self.allocate_inner(layout)
@@ -95,6 +98,7 @@ unsafe impl GlobalAlloc for KAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        // SAFETY: By method precondition, the pointer isn't null.
         let ptr = unsafe { NonNull::new_unchecked(ptr) }.cast();
         // SAFETY:
         // By method precondition, this pointer came from `self.alloc(layout)`, so we can
@@ -159,8 +163,13 @@ impl FixedSizeAllocator {
     /// This function may only be called with one value of `size` for a given
     /// [`FixedSizeAllocator`].
     unsafe fn allocate(&mut self, size: usize) -> Result<NonNull<()>, OutOfMemory> {
-        assert!(size >= core::mem::size_of::<FreeListNode>());
+        #![allow(
+            clippy::panic_in_result_fn,
+            reason = "Panic is for catching implementation bugs"
+        )]
+        assert!(size >= size_of::<FreeListNode>());
         if let Some(free_head) = self.free_list {
+            // SAFETY: The free list entries are valid for reading.
             self.free_list = unsafe { free_head.as_ref() }.next;
             return Ok(free_head.cast());
         }
@@ -183,14 +192,16 @@ impl FixedSizeAllocator {
     /// through this allocator returning it again from [`Self::allocate`].
     unsafe fn deallocate(&mut self, ptr: NonNull<()>) {
         let ptr = ptr.cast::<FreeListNode>();
+        // SAFETY: By precondition, this pointer is valid for writing.
         unsafe {
             ptr.write(FreeListNode {
                 next: self.free_list,
-            })
-        };
+            });
+        }
         self.free_list = Some(ptr);
     }
 }
+// SAFETY: Nothing in the allocator is tied to a thread.
 unsafe impl Send for FixedSizeAllocator {}
 
 struct FreeListNode {

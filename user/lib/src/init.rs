@@ -43,7 +43,7 @@ unsafe extern "Rust" {
 /// This handler just displays the panic information and exits with a non-zero status.
 #[cfg_attr(target_os = "none", panic_handler)]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    use core::fmt::Write;
+    use core::fmt::Write as _;
     // SAFETY:
     // This panic handler will never return to outside code, so it is safe to take ownership over
     // the stdout stream.

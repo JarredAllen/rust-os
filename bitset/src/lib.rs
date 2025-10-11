@@ -1,15 +1,20 @@
+//! A macro for making bit sets (see [`bitset!`]).
+
 #![no_std]
 
+/// A macro for making bitsets.
 #[macro_export]
 macro_rules! bitset {
     (
+        $( #[$set_meta:meta] )*
         $pub:vis $name:ident($repr:ty) {
             $(
-                // TODO Allow doc comments here
+                $( #[$bit_meta:meta] )*
                 $bit:ident $( = $disc:expr)? ),*
             $(,)?
         }
     ) => {$crate::__macro_export::paste! {
+            $( #[$set_meta] )*
             #[derive(Clone, Copy, Debug, PartialEq, Eq)]
             $pub struct $name($repr);
             const _: () = {
@@ -18,6 +23,7 @@ macro_rules! bitset {
                 /// Constructors
                 impl $name {
                     $(
+                        $( #[$bit_meta] )*
                         pub const [< $bit:snake:upper >]: Self = Self(1 << (Offsets::$bit as usize));
                     )*
 
@@ -44,6 +50,7 @@ macro_rules! bitset {
                     }
 
                     $(
+                        $( #[$bit_meta] )*
                         pub const fn [< $bit:snake:lower >](self) -> bool {
                             self.contains(Self::[< $bit:snake:upper >])
                         }
@@ -134,9 +141,16 @@ macro_rules! bitset {
 /// TODO All functionality should be duplicated between the trait (allowing for generic code) and
 /// inherent methods (so you don't have to import the trait).
 pub trait BitSet: From<Self::Repr> + Into<Self::Repr> {
+    /// The underlying representation for this value.
     type Repr;
 
+    /// Get a reference to the inner value.
     fn as_inner(&self) -> &Self::Repr;
+
+    /// Get a mutable reference to the inner value.
+    ///
+    /// You may experience unexpected behavior if you set bits on the inner value which don't match
+    /// bits in the bit set, but the behavior will still be sound.
     fn as_inner_mut(&mut self) -> &mut Self::Repr;
 }
 

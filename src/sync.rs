@@ -79,9 +79,9 @@ impl<T: Default> Default for KSpinLock<T> {
 
 // UnsafeCell implements `Send` as appropriate, so we only need `Sync`.
 
-/// # Safety
-/// Sharing the mutex between threads corresponds to sending the value to whichever thread locks
-/// the mutex.
+// SAFETY:
+// Sharing the mutex between threads corresponds to sending the value to whichever thread locks
+// the mutex.
 unsafe impl<T: Send> Sync for KSpinLock<T> {}
 
 /// An RAII guard for a [`KSpinLock`].
@@ -91,7 +91,7 @@ pub struct KSpinLockGuard<'a, T: ?Sized> {
     data: &'a mut T,
     flag: &'a AtomicBool,
 }
-impl<T: ?Sized> core::ops::Deref for KSpinLockGuard<'_, T> {
+impl<T: ?Sized> Deref for KSpinLockGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         self.data
@@ -108,6 +108,12 @@ impl<T: ?Sized> Drop for KSpinLockGuard<'_, T> {
     }
 }
 
+/// A lazy-initialized value.
+///
+/// Note that the default value for `F` is a function pointer, which takes a word of space and
+/// which requires the function to not be a closure that captures values. You can use other types
+/// to address either shortcoming, but most other meaningful types aren't nameable, so they can't
+/// be used in a `static` variable.
 pub struct LazyLock<T, F = fn() -> T> {
     value: UnsafeCell<MaybeUninit<T>>,
     init_func: UnsafeCell<MaybeUninit<F>>,
@@ -115,6 +121,7 @@ pub struct LazyLock<T, F = fn() -> T> {
     finished: AtomicBool,
 }
 impl<T, F> LazyLock<T, F> {
+    /// Construct a new [`LazyLock`] that will call the given function to initialize.
     pub const fn new(f: F) -> Self {
         Self {
             value: UnsafeCell::new(MaybeUninit::uninit()),
@@ -124,20 +131,26 @@ impl<T, F> LazyLock<T, F> {
         }
     }
 
+    /// Force the value to be initialized.
     pub fn force(&self) -> &T
     where
         F: FnOnce() -> T,
         T: core::fmt::Debug,
     {
         if self.finished.load(Ordering::Acquire) {
+            // SAFETY: The value has been initialized, so we can read.
             let value = unsafe { &*self.value.get() };
+            // SAFETY: The value has been initialized, so we can read.
             unsafe { value.assume_init_ref() }
         } else {
+            #[expect(clippy::manual_assert, reason = "TODO Remove panic")]
             if self.started.swap(true, Ordering::AcqRel) {
                 panic!("TODO Deconflict concurrent initialization attempts");
             }
+            // SAFETY: We're about to initialize, so we can move out of the pointer.
             let init_func = unsafe { self.init_func.get().read() };
             let value =
+                // SAFETY: We have exclusive access, so we can write.
                 unsafe { &mut *self.value.get() }.write(unsafe { init_func.assume_init() }());
             self.finished.store(true, Ordering::Release);
             value
@@ -161,11 +174,15 @@ impl<T, F> Drop for LazyLock<T, F> {
         let finished = self.started.load(Ordering::Acquire);
         match (started, finished) {
             (false, false) => {
+                // SAFETY: We have exclusive access.
                 let init_func = unsafe { &mut *self.init_func.get() };
+                // SAFETY: Function hasn't been consumed, but won't be, so we can drop.
                 unsafe { init_func.assume_init_drop() };
             }
             (true, true) => {
+                // SAFETY: We have exclusive access.
                 let value = unsafe { &mut *self.value.get() };
+                // SAFETY: Value is initialized, but won't be used anymore, so we can drop.
                 unsafe { value.assume_init_drop() };
             }
             _ => {
@@ -175,5 +192,7 @@ impl<T, F> Drop for LazyLock<T, F> {
     }
 }
 
+// SAFETY: It contains a `T` or an `F`.
 unsafe impl<T: Sync, F: Send> Sync for LazyLock<T, F> {}
+// SAFETY: It contains a `T` or an `F`.
 unsafe impl<T: Send, F: Send> Send for LazyLock<T, F> {}

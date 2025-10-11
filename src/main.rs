@@ -1,3 +1,5 @@
+//! The kernel implementation.
+
 #![no_std]
 #![no_main]
 
@@ -27,11 +29,13 @@ const USER_PROC: &[u8] = include_bytes!("../target/riscv32imac-unknown-none-elf/
 ///
 /// This function is called by [`boot`] as soon as we can leave assembly and enter pure Rust code.
 #[unsafe(no_mangle)]
-fn kernel_main() -> ! {
+extern "C" fn kernel_main() -> ! {
     // Zero-initialize the BSS section.
     //
     // This needs to run before any code that references a zero-initialized static, in case the
     // bootloader in the BIOS doesn't zero-initialize this memory for us.
+    //
+    // SAFETY: We just entered the kernel, so we have exclusive access to all of memory.
     let bss = unsafe {
         core::slice::from_raw_parts_mut(
             __bss.cast::<u8>(),
@@ -47,10 +51,12 @@ fn kernel_main() -> ! {
     // Keep only logs at `Info` level or above.
     logger::init_logger(log::LevelFilter::Info);
 
+    // SAFETY: We take ownership over this device.
     let storage = unsafe { virtio::VirtioBlock::init_kernel_address() }
         .expect("Failed to create storage driver");
     let fs = ext2::Ext2::new(storage).expect("Failed to initialize filesystem");
 
+    // SAFETY: We take ownership over this device.
     let rng = unsafe { virtio::VirtioRandom::init_kernel_address() }
         .expect("Failed to create RNG driver");
 
@@ -63,12 +69,15 @@ fn kernel_main() -> ! {
     let mut idle_proc = proc::Process::create_process(&[]).expect("Failed to init user process");
     idle_proc.set_idle();
 
+    // SAFETY:
+    // We set `idle_proc` to return here.
     unsafe {
         proc::switch_context(&mut idle_proc, &mut user_proc);
     };
 
     loop {
         log::info!("Reached idle loop");
+        // SAFETY: "wait for interrupt" is safe.
         unsafe { core::arch::asm!("wfi", options(nomem, preserves_flags, nostack)) };
         proc::sched_yield();
     }
@@ -90,7 +99,7 @@ impl DeviceTree {
 static DEVICE_TREE: DeviceTree = DeviceTree::new();
 
 #[unsafe(no_mangle)]
-fn handle_trap(frame: &mut trap::TrapFrame) {
+extern "C" fn handle_trap(frame: &mut trap::TrapFrame) {
     const SCAUSE_ECALL: u32 = 8;
 
     let scause = csr::read_csr!(scause);
@@ -106,6 +115,7 @@ fn handle_trap(frame: &mut trap::TrapFrame) {
             panic!("Unexpected trap scause={scause:X}, stval={stval:X}, user_pc={user_pc:X}, ");
         }
     }
+    // SAFETY: We set `sepc` to the return address for `sret`.
     unsafe { csr::write_csr!(sepc = user_pc) };
 }
 
@@ -217,6 +227,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     _ = writeln!(sbi::SbiPutcharWriter, "{info}");
 
     loop {
+        // SAFETY: "wait for interrupt" is safe.
         unsafe { core::arch::asm!("wfi", options(nomem, preserves_flags, nostack)) };
         core::hint::spin_loop();
     }

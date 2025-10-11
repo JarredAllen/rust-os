@@ -1,13 +1,19 @@
+//! Filesystem access.
+
+/// Owned access to a file.
 pub struct File {
+    /// The underlying resource descriptor.
     descriptor: i32,
 }
 
 impl File {
+    /// Open an existing file for reading.
     pub fn open(path: &str) -> Result<Self, shared::ErrorKind> {
         let descriptor = crate::sys::open(path, shared::FileOpenFlags::READ_ONLY)?;
         Ok(Self { descriptor })
     }
 
+    /// Open an existing file for appending.
     pub fn append(path: &str) -> Result<Self, shared::ErrorKind> {
         let descriptor = crate::sys::open(
             path,
@@ -31,14 +37,14 @@ impl File {
         crate::sys::write(self.descriptor, buf)
     }
 
+    /// Write the entire buffer into this file.
     pub fn write_all(&self, mut buf: &[u8]) -> Result<(), shared::ErrorKind> {
         loop {
             let len = self.write(buf)?;
             if len == buf.len() {
                 return Ok(());
-            } else {
-                buf = &buf[len..];
             }
+            buf = &buf[len..];
         }
     }
 }

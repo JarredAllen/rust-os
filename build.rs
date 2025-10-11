@@ -1,3 +1,5 @@
+//! Build script for the kernel.
+
 use std::{env, fs, path::PathBuf};
 
 const LINKER_SCRIPT: &str = include_str!("./kernel.ld");

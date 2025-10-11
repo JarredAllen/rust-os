@@ -29,13 +29,15 @@ impl<'a> Ext2<'a> {
         {
             this.fs.read_sector(buf, sector_in_block as u64 + 2)?;
         }
-        this.superblock()
-            .check_validity()
-            .expect("Superblock has invalid data");
+        this.superblock().check_validity()?;
         Ok(this)
     }
 
     fn superblock(&self) -> Superblock {
+        #![expect(
+            clippy::cast_ptr_alignment,
+            reason = "Byte buffer comes from a more-aligned allocation, so it will be aligned"
+        )]
         let alloc = self.superblock.as_ref();
         let superblock = core::ptr::from_ref(alloc).cast::<Superblock>();
         unsafe { superblock.read() }
@@ -54,9 +56,11 @@ impl<'a> Ext2<'a> {
 
         let inodes_per_sector = 512 / superblock.inode_size;
 
-        let inode_sector = inode_block as u64 * (2 << superblock.block_size_raw)
-            + ((inode_num.saturating_sub(1) % superblock.inodes_per_block())
-                / inodes_per_sector as u32) as u64;
+        let inode_sector = u64::from(inode_block) * (2 << superblock.block_size_raw)
+            + u64::from(
+                (inode_num.saturating_sub(1) % superblock.inodes_per_block())
+                    / u32::from(inodes_per_sector),
+            );
 
         let mut buf = [0; 512];
         self.fs
@@ -67,10 +71,12 @@ impl<'a> Ext2<'a> {
             % inodes_per_sector as usize)
             * superblock.inode_size as usize;
 
+        #[expect(clippy::cast_ptr_alignment, reason = "We only do an unaligned read")]
         let inode_ptr = core::ptr::from_ref(&buf)
             .cast::<Inode>()
             .wrapping_byte_add(inode_index_in_sector);
 
+        // SAFETY: We just wrote an Inode there from the disk.
         unsafe { core::ptr::read_unaligned(inode_ptr) }
     }
 
@@ -142,7 +148,9 @@ impl<'a> Ext2<'a> {
     ) -> Result<()> {
         let superblock = self.superblock();
         let inode = self.inode(inode_num);
-        assert_eq!(inode.inode_type(), InodeType::RegularFile);
+        if inode.inode_type() != InodeType::RegularFile {
+            return Err(ErrorKind::InvalidFormat.into());
+        }
         let block_idx = sector_num / superblock.sectors_per_block();
         let block_num = *inode
             .direct_block_pointers
@@ -153,14 +161,14 @@ impl<'a> Ext2<'a> {
             })?;
         self.fs.read_sector(
             buf,
-            block_num as u64 * superblock.sectors_per_block() as u64
-                + sector_num as u64 % superblock.sectors_per_block() as u64,
+            u64::from(block_num) * u64::from(superblock.sectors_per_block())
+                + u64::from(sector_num) % u64::from(superblock.sectors_per_block()),
         )?;
         Ok(())
     }
 
     fn block_group_descriptor(&mut self, group_num: u32) -> BlockGroupDescriptor {
-        const DESCS_PER_SECTOR: usize = 512 / core::mem::size_of::<BlockGroupDescriptor>();
+        const DESCS_PER_SECTOR: usize = 512 / size_of::<BlockGroupDescriptor>();
         let superblock = self.superblock();
         assert!(group_num < superblock.num_block_groups());
         let table_start_sector = 2 + superblock.block_size() / 512;
@@ -168,9 +176,10 @@ impl<'a> Ext2<'a> {
         self.fs
             .read_sector(
                 &mut buf,
-                table_start_sector + (group_num as u64 * DESCS_PER_SECTOR as u64) / 512,
+                table_start_sector + (u64::from(group_num) * DESCS_PER_SECTOR as u64) / 512,
             )
             .expect("Failed to read block descriptor table");
+        #[expect(clippy::cast_ptr_alignment, reason = "Read is unaligned")]
         let desc_ptr = core::ptr::from_ref(&buf)
             .cast::<BlockGroupDescriptor>()
             .wrapping_add(group_num as usize % DESCS_PER_SECTOR);
@@ -184,7 +193,7 @@ impl<'a> Ext2<'a> {
     fn read_block(&mut self, block_num: u32) -> KByteBuf {
         let mut buf =
             KByteBuf::new_zeroed(self.superblock().block_size() as usize).expect("Out of memory");
-        let start_sector = block_num as u64 * self.superblock().sectors_per_block() as u64;
+        let start_sector = u64::from(block_num) * u64::from(self.superblock().sectors_per_block());
         for (sector_in_block, buf) in buf.as_chunks_mut().0.iter_mut().enumerate() {
             self.fs
                 .read_sector(buf, start_sector + sector_in_block as u64)
@@ -230,6 +239,7 @@ impl DirectoryEntryIter {
 
 #[repr(C)]
 #[derive(Debug)]
+#[allow(clippy::struct_field_names, reason = "Names come from ext2 docs")]
 struct Superblock {
     inode_count: u32,
     block_count: u32,
@@ -310,7 +320,7 @@ impl Superblock {
     }
 
     fn inodes_per_block(&self) -> u32 {
-        (self.block_size() / self.inode_size as u64) as u32
+        (self.block_size() / u64::from(self.inode_size)) as u32
     }
 }
 
@@ -355,7 +365,7 @@ struct Inode {
 }
 impl Inode {
     fn file_size(&self) -> u64 {
-        self.size_lower as u64 | ((self.size_upper_or_directory_acl as u64) << 32)
+        u64::from(self.size_lower) | (u64::from(self.size_upper_or_directory_acl) << 32)
     }
 
     fn inode_type(&self) -> InodeType {
@@ -442,7 +452,8 @@ impl DirectoryEntry {
         // We make a pointer to the value by first artificially constructing a pointer to a slice
         // with the right length. The slice pointer has the same format, so we can transmute.
         let similar_ptr = core::ptr::slice_from_raw_parts(header_ptr, len);
-        let entry_ptr: *const Self = unsafe { core::mem::transmute(similar_ptr) };
+        let entry_ptr: *const Self = similar_ptr as *const Self;
+        // SAFETY: By precondition, this is a valid header.
         unsafe { &*entry_ptr }
     }
 }

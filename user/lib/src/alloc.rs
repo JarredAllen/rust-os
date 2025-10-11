@@ -24,6 +24,7 @@ pub struct Allocator {
 }
 impl Allocator {
     /// Create a new allocator.
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             classes: [const { SpinLock::new(FixedSizeAllocator::new()) }; NUM_SIZE_CLASSES],
@@ -36,6 +37,7 @@ impl Allocator {
     ///
     /// This function may return `None` if we're out of memory and attempting to allocate more
     /// fails.
+    #[must_use]
     fn allocate_inner(&self, layout: core::alloc::Layout) -> Option<NonNull<[u8]>> {
         if layout.size() == 0 {
             return Some(NonNull::slice_from_raw_parts(
@@ -82,6 +84,8 @@ impl Default for Allocator {
     }
 }
 
+// SAFETY:
+// This implementation must conform to the contract specified for return values.
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
         self.allocate_inner(layout)
@@ -89,6 +93,7 @@ unsafe impl GlobalAlloc for Allocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        // SAFETY: By method precondition, pointer isn't null.
         let ptr = unsafe { NonNull::new_unchecked(ptr) }.cast();
         // SAFETY:
         // By method precondition, this pointer came from `self.alloc(layout)`, so we can
@@ -153,8 +158,10 @@ impl FixedSizeAllocator {
     /// This function may only be called with one value of `size` for a given
     /// [`FixedSizeAllocator`].
     unsafe fn allocate(&mut self, size: usize) -> Option<NonNull<()>> {
-        assert!(size >= core::mem::size_of::<FreeListNode>());
+        assert!(size >= size_of::<FreeListNode>());
         if let Some(free_head) = self.free_list {
+            // SAFETY:
+            // The free list contains valid values, so we can read them.
             self.free_list = unsafe { free_head.as_ref() }.next;
             return Some(free_head.cast());
         }
@@ -177,14 +184,17 @@ impl FixedSizeAllocator {
     /// through this allocator returning it again from [`Self::allocate`].
     unsafe fn deallocate(&mut self, ptr: NonNull<()>) {
         let ptr = ptr.cast::<FreeListNode>();
+        // SAFETY:
+        // Our allocations are large enough to store this (and aligned for it).
         unsafe {
             ptr.write(FreeListNode {
                 next: self.free_list,
-            })
-        };
+            });
+        }
         self.free_list = Some(ptr);
     }
 }
+// SAFETY: Nothing is tied to a specific thread.
 unsafe impl Send for FixedSizeAllocator {}
 
 struct FreeListNode {

@@ -43,12 +43,16 @@ impl<T> KrcBox<T> {
         let ptr = super::ALLOCATOR
             .allocate_inner(Layout::new::<KrcBoxInner<T>>())?
             .cast::<KrcBoxInner<T>>();
+        // SAFETY:
+        // We just allocated the value and haven't shared it, so we can write to it.
         unsafe {
             ptr.as_ptr()
                 .cast::<AtomicUsize>()
                 .wrapping_byte_add(core::mem::offset_of!(KrcBoxInner<T>, refcount))
-                .write(AtomicUsize::new(1))
-        };
+                .write(AtomicUsize::new(1));
+        }
+        // SAFETY:
+        // We just allocated the value and haven't shared it, so we have exclusive access.
         let value_memory = unsafe {
             &mut *ptr
                 .as_ptr()
@@ -99,18 +103,23 @@ impl<T: ?Sized> Deref for KrcBox<T> {
 impl<T: ?Sized> Drop for KrcBox<T> {
     fn drop(&mut self) {
         if decrement_if_unsaturated(&self.inner().refcount) == 0 {
+            // SAFETY:
+            // The allocation is about to be freed, so we can free the allocated value.
+            unsafe { self.ptr.drop_in_place() };
+            // SAFETY:
+            // We allocated using this layout, so we can free with this layout.
             unsafe {
-                super::ALLOCATOR.deallocate_inner(self.ptr.cast(), Layout::for_value(self.inner()))
+                super::ALLOCATOR.deallocate_inner(self.ptr.cast(), Layout::for_value(self.inner()));
             }
         }
     }
 }
 
-// Safety;
+// SAFETY;
 // Sending a `KrcBox` between threads can be sending or sharing the inner value, depending on
 // whether other pointers exist to it.
 unsafe impl<T: Send + Sync + ?Sized> Send for KrcBox<T> {}
-// Safety:
+// SAFETY:
 // Sharing a `KrcBox` between threads shares the inner value, but also the reference can be cloned
 // to potentially send the inner value.
 unsafe impl<T: Send + Sync + ?Sized> Sync for KrcBox<T> {}
