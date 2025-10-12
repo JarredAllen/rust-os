@@ -13,12 +13,9 @@ impl File {
         Ok(Self { descriptor })
     }
 
-    /// Open an existing file for appending.
-    pub fn append(path: &str) -> Result<Self, shared::ErrorKind> {
-        let descriptor = crate::sys::open(
-            path,
-            shared::FileOpenFlags::WRITE_ONLY | shared::FileOpenFlags::APPEND,
-        )?;
+    /// Open an existing file to overwrite from the beginnin.
+    pub fn overwrite(path: &str) -> Result<Self, shared::ErrorKind> {
+        let descriptor = crate::sys::open(path, shared::FileOpenFlags::WRITE_ONLY)?;
         Ok(Self { descriptor })
     }
 

@@ -106,7 +106,7 @@ impl VirtioBlock<'_> {
 
     /// Read a sector from the device into the buffer.
     pub fn read_sector(&mut self, buf: &mut [u8; BLOCK_SECTOR_LEN], sector: u64) -> Result<()> {
-        log::info!("Reading sector {sector} from virtio block device");
+        log::trace!("Reading sector {sector} from virtio block device");
         let mut request = BlockRequest {
             ty: BlockRequestType::Read,
             reserved: 0,
@@ -122,7 +122,7 @@ impl VirtioBlock<'_> {
 
     /// Write a sector to the buffer.
     pub fn write_sector(&mut self, data: &[u8; BLOCK_SECTOR_LEN], sector: u64) -> Result<()> {
-        log::info!("Writing sector {sector} to virtio block device");
+        log::trace!("Writing sector {sector} to virtio block device");
         let mut request = BlockRequest {
             ty: BlockRequestType::Write,
             reserved: 0,

@@ -1,8 +1,10 @@
 use shared::ErrorKind;
 
 use crate::{
-    error::Result, page_table::PAGE_SIZE, proc::ResourceDescriptor,
-    resource_desc::ResourceDescription,
+    error::Result,
+    page_table::PAGE_SIZE,
+    proc::ResourceDescriptor,
+    resource_desc::{FileFlags, ResourceDescription},
 };
 
 const PUT_CHAR_NUM: u32 = shared::Syscall::PutChar as u32;
@@ -92,7 +94,8 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
                     frame.a2 as usize,
                 )
             };
-            match syscall_open(path_name) {
+            let flags = shared::FileOpenFlags::from(frame.a3);
+            match syscall_open(path_name, flags) {
                 Ok(desc) => frame.a1 = desc as u32,
                 Err(e) => {
                     frame.a1 = -1_i32 as u32;
@@ -158,7 +161,7 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
     }
 }
 
-fn syscall_open(path_name: &[u8]) -> Result<usize> {
+fn syscall_open(path_name: &[u8], open_flags: shared::FileOpenFlags) -> Result<usize> {
     let _allow = crate::csr::AllowUserModeMemory::allow();
     let path_name = str::from_utf8(path_name).map_err(|_| ErrorKind::InvalidFormat)?;
     // TODO Support relative paths.
@@ -182,10 +185,21 @@ fn syscall_open(path_name: &[u8]) -> Result<usize> {
         .unwrap()
         .lookup_path(path_name.split('/'))
         .ok_or(ErrorKind::NotFound)?;
+    let mut flags = FileFlags::PRESENT;
+    if open_flags.read_only() {
+        flags = flags.bit_or(FileFlags::READABLE);
+    }
+    if open_flags.write_only() {
+        flags = flags.bit_or(FileFlags::WRITABLE);
+    }
     *slot = Some(ResourceDescriptor::new(ResourceDescription::for_file(
         crate::resource_desc::FileResourceDescriptionData {
-            flags: crate::resource_desc::FileFlags::NEW_READ_ONLY,
-            offset: 0,
+            flags,
+            offset: if open_flags.append() {
+                todo!("Set offset to end of file")
+            } else {
+                0
+            },
             inode_num,
         },
     ))?);
@@ -200,7 +214,7 @@ fn syscall_read(desc_num: u32, user_buf: &mut [u8]) -> Result<usize> {
     let desc = unsafe { &mut *proc.resource_descriptors }[desc_num as usize]
         .as_ref()
         .ok_or(ErrorKind::NotFound)?;
-    Ok(desc.description().read(user_buf))
+    desc.description().read(user_buf)
 }
 
 fn syscall_write(desc_num: u32, user_buf: &[u8]) -> Result<usize> {
@@ -211,7 +225,7 @@ fn syscall_write(desc_num: u32, user_buf: &[u8]) -> Result<usize> {
     let desc = unsafe { &mut *proc.resource_descriptors }[desc_num as usize]
         .as_ref()
         .ok_or(ErrorKind::NotFound)?;
-    Ok(desc.description().write(user_buf))
+    desc.description().write(user_buf)
 }
 
 fn syscall_mmap(alloc_size: u32) -> Result<usize> {

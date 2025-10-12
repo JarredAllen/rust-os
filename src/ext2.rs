@@ -94,15 +94,15 @@ impl<'a> Ext2<'a> {
 
     /// Get the inode number for a specific path, if present.
     pub fn lookup_path<'path>(
-        &mut self,
-        path_parts: impl IntoIterator<Item = &'path str>,
-    ) -> Option<u32> {
-        let mut inode_num = 2;
-        for part in path_parts {
-            inode_num = self.read_dir(inode_num).find_for_name(part)?.inode_num;
-        }
-        Some(inode_num)
+    &mut self,
+    path_parts: impl IntoIterator<Item = &'path str>,
+) -> Option<u32> {
+    let mut inode_num = 2;
+    for part in path_parts {
+        inode_num = self.read_dir(inode_num).find_for_name(part)?.inode_num;
     }
+    Some(inode_num)
+}
 
     pub fn read_file_from_offset(
         &mut self,
@@ -133,11 +133,43 @@ impl<'a> Ext2<'a> {
 
     pub fn write_file_from_offset(
         &mut self,
-        _inode_num: u32,
-        _offset: u64,
-        _buf: &[u8],
+        inode_num: u32,
+        mut offset: u64,
+        mut buf: &[u8],
     ) -> Result<usize> {
-        todo!("Write to a file");
+        let len = buf.len();
+        if !offset.is_multiple_of(512) {
+            let sector_num = offset / 512;
+            let sector_buf = &mut [0; 512];
+            self.read_inode_sector(inode_num, sector_num as u32, sector_buf)?;
+            let write_len = (offset.next_multiple_of(512) - offset) as usize;
+            if let Some(write) = buf.split_off(..write_len) {
+                sector_buf[512 - write_len..].copy_from_slice(write);
+                self.write_inode_sector(inode_num, sector_num as u32, sector_buf)?;
+                offset += write_len as u64;
+            } else {
+                let write_start = 512 - write_len;
+                sector_buf[write_start..][..buf.len()].copy_from_slice(buf);
+                self.write_inode_sector(inode_num, sector_num as u32, sector_buf)?;
+                return Ok(buf.len());
+            }
+        }
+        let (full_sectors, remainder) = buf.as_chunks::<512>();
+        for sector in full_sectors {
+            let sector_num = offset / 512;
+            self.write_inode_sector(inode_num, sector_num as u32, sector)?;
+            offset += 512;
+        }
+        if !remainder.is_empty() {
+            let sector_num = offset / 512;
+            let sector_buf = &mut [0; 512];
+            self.read_inode_sector(inode_num, sector_num as u32, sector_buf)?;
+            sector_buf[..remainder.len()].copy_from_slice(remainder);
+            self.write_inode_sector(inode_num, sector_num as u32, sector_buf)?;
+            offset += remainder.len() as u64;
+        }
+        self.set_inode_length_at_least(inode_num, offset)?;
+        Ok(len)
     }
 
     fn read_inode_sector(
@@ -167,6 +199,34 @@ impl<'a> Ext2<'a> {
         Ok(())
     }
 
+    fn write_inode_sector(
+        &mut self,
+        inode_num: u32,
+        sector_num: u32,
+        contents: &[u8; 512],
+    ) -> Result<()> {
+        let superblock = self.superblock();
+        let inode = self.inode(inode_num);
+        assert_eq!(inode.inode_type(), InodeType::RegularFile);
+        let block_idx = sector_num / superblock.sectors_per_block();
+        let block_num = *inode
+            .direct_block_pointers
+            .get(block_idx as usize)
+            .ok_or_else(|| {
+                log::error!("TODO Support indirect block pointers");
+                Error::from(ErrorKind::Unsupported)
+            })?;
+        if block_num == 0 {
+            todo!("Allocate additional blocks for inode");
+        }
+        self.fs.write_sector(
+            contents,
+            block_num as u64 * superblock.sectors_per_block() as u64
+                + sector_num as u64 % superblock.sectors_per_block() as u64,
+        )?;
+        Ok(())
+    }
+
     fn block_group_descriptor(&mut self, group_num: u32) -> BlockGroupDescriptor {
         const DESCS_PER_SECTOR: usize = 512 / size_of::<BlockGroupDescriptor>();
         let superblock = self.superblock();
@@ -191,15 +251,61 @@ impl<'a> Ext2<'a> {
     /// This takes extra time to read the whole block, so only use this method if you actually need
     /// to get the whole block.
     fn read_block(&mut self, block_num: u32) -> KByteBuf {
-        let mut buf =
-            KByteBuf::new_zeroed(self.superblock().block_size() as usize).expect("Out of memory");
-        let start_sector = u64::from(block_num) * u64::from(self.superblock().sectors_per_block());
-        for (sector_in_block, buf) in buf.as_chunks_mut().0.iter_mut().enumerate() {
+    let mut buf =
+        KByteBuf::new_zeroed(self.superblock().block_size() as usize).expect("Out of memory");
+    let start_sector = u64::from(block_num) * u64::from(self.superblock().sectors_per_block());
+    for (sector_in_block, buf) in buf.as_chunks_mut().0.iter_mut().enumerate() {
+        self.fs
+            .read_sector(buf, start_sector + sector_in_block as u64)
+            .expect("Failed to read sector of block");
+    }
+    buf
+}
+
+    fn set_inode_length_at_least(&mut self, inode_num: u32, min_length: u64) -> Result<()> {
+        let superblock = self.superblock();
+        let group_num = inode_num.saturating_sub(1) / superblock.inodes_per_group;
+        let group = self.block_group_descriptor(group_num);
+
+        // TODO Check that the inode is used.
+
+        let inode_block = group.inode_table_addr
+            + (inode_num.saturating_sub(1) % superblock.inodes_per_group)
+                / superblock.inodes_per_block();
+
+        let inodes_per_sector = 512 / superblock.inode_size;
+
+        let inode_sector = inode_block as u64 * (2 << superblock.block_size_raw)
+            + ((inode_num.saturating_sub(1) % superblock.inodes_per_block())
+                / inodes_per_sector as u32) as u64;
+
+        let buf = &mut [0; 512];
+        self.fs
+            .read_sector(buf, inode_sector)
+            .expect("Failed to read inode");
+
+        let inode_index_in_sector = (inode_num.saturating_sub(1) as usize
+            % inodes_per_sector as usize)
+            * superblock.inode_size as usize;
+
+        let inode_ptr = core::ptr::from_mut(buf)
+            .cast::<Inode>()
+            .wrapping_byte_add(inode_index_in_sector);
+
+        let mut inode = unsafe { core::ptr::read_unaligned(inode_ptr) };
+        let old_size = inode.size_lower as u64 | ((inode.size_upper_or_directory_acl as u64) << 32);
+        if min_length > old_size {
+            log::info!("increasing file length from {old_size} to {min_length}");
+            inode.size_lower = min_length as u32;
+            inode.size_upper_or_directory_acl = (min_length >> 32) as u32;
+            unsafe { inode_ptr.write_unaligned(inode) };
             self.fs
-                .read_sector(buf, start_sector + sector_in_block as u64)
-                .expect("Failed to read sector of block");
+                .write_sector(buf, inode_sector)
+                .expect("Failed to read inode");
+        } else {
+            log::info!("Not increasing file length from {old_size} to {min_length}");
         }
-        buf
+        Ok(())
     }
 }
 
@@ -469,6 +575,7 @@ bitset::bitset!(
     }
 );
 impl OptionalFeatures {
+    #[expect(unused, reason = "We will eventually use features")]
     const SUPPORTED: Self = Self::empty();
 }
 

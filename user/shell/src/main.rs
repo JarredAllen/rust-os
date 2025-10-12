@@ -56,16 +56,23 @@ extern "Rust" fn main() {
                                 .expect("File was invalid utf-8");
                         print!("{contents}");
                     }
-                    "append" => {
+                    "prepend" => {
                         let Some(filename) = cmd_parts.next() else {
-                            print!("Missing filename for append command\n> ");
+                            print!("Missing filename for prepend command\n> ");
                             line_buf.clear();
                             continue;
                         };
                         let file = File::open(filename).expect("Failed to open file");
-                        let append_buf = &cmd.as_bytes()[8 + filename.len()..];
-                        println!("Writing {}", hex_display::Hex(append_buf));
-                        file.write_all(append_buf).expect("Error writing to buffer");
+                        let read_buf = &mut [0; 2048];
+                        let contents =
+                            str::from_utf8(file.read(read_buf).expect("Failed to read file"))
+                                .expect("File was invalid utf-8");
+                        let file = File::overwrite(filename).expect("Failed to open file");
+                        let prepend_buf = &cmd.as_bytes()[9 + filename.len()..];
+                        file.write_all(prepend_buf)
+                            .expect("Error writing to buffer");
+                        file.write_all(contents.as_bytes())
+                            .expect("Error writing to buffer");
                     }
                     _ => {
                         println!("Unrecognized command: {cmd}");

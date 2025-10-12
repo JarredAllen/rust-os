@@ -1,5 +1,7 @@
 //! Code for handling open resource descriptions.
 
+use crate::error::Result;
+
 /// The state of an open resource.
 pub struct ResourceDescription {
     /// The set of methods on this resource.
@@ -11,29 +13,29 @@ pub struct ResourceDescription {
 impl ResourceDescription {
     /// Create a new descriptor for the given file data.
     pub const fn for_file(file_data: FileResourceDescriptionData) -> Self {
-        Self {
-            vtable: RawResourceDescriptionVTable::FILE_VTABLE,
-            data: ResourceDescriptionData { file: file_data },
-        }
+    Self {
+        vtable: RawResourceDescriptionVTable::FILE_VTABLE,
+        data: ResourceDescriptionData { file: file_data },
     }
+}
 
     /// Read from the given resource.
-    pub fn read(&mut self, buf: &mut [u8]) -> usize {
-        // SAFETY: We keep the vtable and the value together to meet the precondition.
-        unsafe { (self.vtable.read)(&mut self.data, buf) }
-    }
+    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+    // SAFETY: We keep the vtable and the value together to meet the precondition.
+    unsafe { (self.vtable.read)(&mut self.data, buf) }
+}
 
     /// Write to the given resource.
-    pub fn write(&mut self, buf: &[u8]) -> usize {
-        // SAFETY: We keep the vtable and the value together to meet the precondition.
-        unsafe { (self.vtable.write)(&mut self.data, buf) }
-    }
+    pub fn write(&mut self, buf: &[u8]) -> Result<usize> {
+    // SAFETY: We keep the vtable and the value together to meet the precondition.
+    unsafe { (self.vtable.write)(&mut self.data, buf) }
+}
 
     /// Close the given resource.
     pub fn close(&mut self) {
-        // SAFETY: We keep the vtable and the value together to meet the precondition.
-        unsafe { (self.vtable.close)(&mut self.data) }
-    }
+    // SAFETY: We keep the vtable and the value together to meet the precondition.
+    unsafe { (self.vtable.close)(&mut self.data) }
+}
 }
 impl Drop for ResourceDescription {
     fn drop(&mut self) {
@@ -60,14 +62,14 @@ impl FileFlags {
 /// [`ResourceDescriptionData`] associated with the same resource descriptor as contains this
 /// vtable.
 struct RawResourceDescriptionVTable {
-    read: unsafe fn(&mut ResourceDescriptionData, &mut [u8]) -> usize,
-    write: unsafe fn(&mut ResourceDescriptionData, &[u8]) -> usize,
+    read: unsafe fn(&mut ResourceDescriptionData, &mut [u8]) -> Result<usize>,
+    write: unsafe fn(&mut ResourceDescriptionData, &[u8]) -> Result<usize>,
     close: unsafe fn(&mut ResourceDescriptionData),
 }
 impl RawResourceDescriptionVTable {
     /// The [`RawResourceDescriptionVTable`] for file operations.
     const FILE_VTABLE: Self = {
-        fn file_read(file_data: &mut FileResourceDescriptionData, buf: &mut [u8]) -> usize {
+        fn file_read(file_data: &mut FileResourceDescriptionData, buf: &mut [u8]) -> Result<usize> {
             assert!(file_data.flags.present() && file_data.flags.readable());
             crate::DEVICE_TREE
                 .storage
@@ -75,17 +77,17 @@ impl RawResourceDescriptionVTable {
                 .as_mut()
                 .unwrap()
                 .read_file_from_offset(file_data.inode_num, file_data.offset, buf)
-                .expect("Read failed")
         }
-        fn file_write(file_data: &mut FileResourceDescriptionData, buf: &[u8]) -> usize {
-            assert!(file_data.flags.present() && file_data.flags.readable());
-            crate::DEVICE_TREE
+        fn file_write(file_data: &mut FileResourceDescriptionData, buf: &[u8]) -> Result<usize> {
+            assert!(file_data.flags.present() && file_data.flags.writable());
+            let len = crate::DEVICE_TREE
                 .storage
                 .lock()
                 .as_mut()
                 .unwrap()
-                .write_file_from_offset(file_data.inode_num, file_data.offset, buf)
-                .expect("Read failed")
+                .write_file_from_offset(file_data.inode_num, file_data.offset, buf)?;
+            file_data.offset += len as u64;
+            Ok(len)
         }
         fn file_close(file_data: &mut FileResourceDescriptionData) {
             file_data.flags = FileFlags::empty();
