@@ -16,6 +16,7 @@ macro_rules! bitset {
     ) => {$crate::__macro_export::paste! {
             $( #[$set_meta] )*
             #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+            #[repr(transparent)]
             $pub struct $name($repr);
             const _: () = {
                 use ::core::ops::BitOr;
@@ -117,6 +118,9 @@ macro_rules! bitset {
                                 f.write_str(::core::concat!(::core::stringify!($bit), " "))?;
                             }
                         )*
+                        if self.0 & !Self::MASK != 0 {
+                            f.write_str("<unknown bits> ")?;
+                        }
                         f.write_str("}")
                     }
                 }
@@ -132,6 +136,16 @@ macro_rules! bitset {
                 enum Offsets {
                     $( $bit $( = $disc )? ),*
                 }
+
+                // A note about bytemuck impls:
+                // Using `bytemuck` functions to set bits not defined may result in weird behavior,
+                // but the behavior will always be sound.
+
+                // SAFETY:
+                // `#[repr(transparent)]` around plain old data is plain old data.
+                unsafe impl $crate::__macro_export::Pod for $name where $repr: $crate::__macro_export::Pod {}
+                // SAFETY: All zeros is the empty value.
+                unsafe impl $crate::__macro_export::Zeroable for $name where $repr: $crate::__macro_export::Zeroable  {}
             };
         }};
 }
@@ -157,4 +171,6 @@ pub trait BitSet: From<Self::Repr> + Into<Self::Repr> {
 #[doc(hidden)]
 pub mod __macro_export {
     pub use paste::paste;
+
+    pub use bytemuck::{Pod, Zeroable};
 }

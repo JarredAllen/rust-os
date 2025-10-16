@@ -1,6 +1,7 @@
 //! Cell types.
 
-use core::{cell::UnsafeCell, mem::MaybeUninit, sync::atomic::AtomicBool};
+use crate::sync::atomic::Atomic;
+use core::{cell::UnsafeCell, mem::MaybeUninit};
 
 /// A wrapper for [`UnsafeCell`] which is also [`Sync`].
 ///
@@ -83,14 +84,8 @@ unsafe impl<T> Send for SyncUnsafeCell<T> {}
 
 /// A locked value which can only be written to once.
 pub struct OnceLock<T> {
-    /// Whether the construction has been locked.
-    ///
-    /// If this value is not set, then no access to [`Self::value`] can exist.
-    locked: AtomicBool,
-    /// Whether [`Self::value`] has been initialized.
-    ///
-    /// If this value is set, then no exclusive access to [`Self::value`] exists anymore.
-    initialized: AtomicBool,
+    /// Flags indicating the inner state.
+    flags: Atomic<OnceLockFlags>,
     /// The inner value.
     value: UnsafeCell<MaybeUninit<T>>,
 }
@@ -99,16 +94,16 @@ impl<T> OnceLock<T> {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            locked: AtomicBool::new(false),
-            initialized: AtomicBool::new(false),
+            flags: Atomic::new(OnceLockFlags::empty()),
             value: UnsafeCell::new(MaybeUninit::uninit()),
         }
     }
 
     /// Get the value, if it has already been initialized.
     pub fn get(&self) -> Option<&T> {
-        self.initialized
+        self.flags
             .load(core::sync::atomic::Ordering::Acquire)
+            .locked()
             .then(|| {
                 // SAFETY:
                 // Because `self.initialized` is set, no more exclusive access can exist.
@@ -123,14 +118,20 @@ impl<T> OnceLock<T> {
     ///
     /// If the value has already been set, then the given value is returned in an `Err`.
     pub fn set(&self, value: T) -> Result<(), T> {
-        if self.locked.swap(true, core::sync::atomic::Ordering::AcqRel) {
+        if self
+            .flags
+            .fetch_or(OnceLockFlags::LOCKED, core::sync::atomic::Ordering::AcqRel)
+            .locked()
+        {
             return Err(value);
         }
         // SAFETY:
         // Becuase we set `self.locked`, we have exclusive access until we mark `self.initialized`.
         unsafe { &mut *self.value.get() }.write(value);
-        self.initialized
-            .store(true, core::sync::atomic::Ordering::Release);
+        self.flags.fetch_or(
+            OnceLockFlags::INITIALIZED,
+            core::sync::atomic::Ordering::Release,
+        );
         Ok(())
     }
 }
@@ -143,8 +144,7 @@ impl<T> Default for OnceLock<T> {
 impl<T> From<T> for OnceLock<T> {
     fn from(value: T) -> Self {
         Self {
-            locked: AtomicBool::new(true),
-            initialized: AtomicBool::new(true),
+            flags: Atomic::new(OnceLockFlags::LOCKED | OnceLockFlags::INITIALIZED),
             value: UnsafeCell::new(MaybeUninit::new(value)),
         }
     }
@@ -155,3 +155,18 @@ unsafe impl<T: Send> Send for OnceLock<T> {}
 // SAFETY:
 // A `OnceLock<T>` is equivalent to a `T`.
 unsafe impl<T: Sync> Sync for OnceLock<T> {}
+
+bitset::bitset!(
+    /// Flags for the state of a `OnceLock`.
+    OnceLockFlags(u8) {
+        /// Whether the construction has been locked.
+        ///
+        /// If this value is not set, then no access to [`Self::value`] can exist.
+        Locked,
+        /// Whether [`Self::value`] has been initialized.
+        ///
+        /// If this value is set, then no exclusive access to [`Self::value`] exists anymore, and
+        /// the value has been initialized.
+        Initialized,
+    }
+);

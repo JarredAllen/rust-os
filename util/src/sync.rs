@@ -1,5 +1,7 @@
 //! Concurrency-related primitives
 
+pub mod atomic;
+
 use core::ops::{Deref, DerefMut};
 
 /// Assert that a type is [`Sync`].
