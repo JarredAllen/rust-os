@@ -115,7 +115,7 @@ impl<T: ?Sized> Drop for KrcBox<T> {
     }
 }
 
-// SAFETY;
+// SAFETY:
 // Sending a `KrcBox` between threads can be sending or sharing the inner value, depending on
 // whether other pointers exist to it.
 unsafe impl<T: Send + Sync + ?Sized> Send for KrcBox<T> {}

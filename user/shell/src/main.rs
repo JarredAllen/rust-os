@@ -32,6 +32,21 @@ extern "Rust" fn main() {
                         println!("{pid}");
                     }
                     "exit" => userlib::sys::exit(0),
+                    "getrandomtest" => {
+                        // Test that `getrandom` enforces valid addresses
+                        // SAFETY:
+                        // We ask the OS to write 1kB random data at memory address 0. This address
+                        // isn't mapped, so it should report an error.
+                        let (ok, err) = unsafe {
+                            userlib::sys::syscall(
+                                userlib::sys::Syscall::GetRandom as u32,
+                                [0, 1024, 0],
+                            )
+                        };
+                        assert_eq!(ok as i32, -1);
+                        assert_eq!(err.unwrap() as u32, 7);
+                        println!("Memory validation rejected successfully!");
+                    }
                     "getrandom" => {
                         let len = cmd_parts
                             .next()

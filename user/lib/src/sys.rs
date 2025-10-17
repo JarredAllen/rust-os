@@ -52,14 +52,19 @@ pub fn exit(status: i32) -> ! {
 }
 
 /// Fill a buffer with random bytes.
-pub fn get_random(buf: &mut [u8]) {
+pub fn get_random(buf: &mut [u8]) -> Result<(), shared::ErrorKind> {
     // SAFETY: This matches the definition of this syscall.
-    _ = unsafe {
+    let (ok, err) = unsafe {
         syscall(
             Syscall::GetRandom as u32,
             [core::ptr::from_mut(buf).addr() as u32, buf.len() as u32, 0],
         )
     };
+    match (ok, err) {
+        (0, _) => Ok(()),
+        (0xFFFF_FFFF_u32, Some(err)) => Err(err),
+        _ => unreachable!(),
+    }
 }
 
 pub(crate) fn open(path: &str, flags: shared::FileOpenFlags) -> Result<i32, shared::ErrorKind> {

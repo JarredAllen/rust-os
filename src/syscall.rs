@@ -2,7 +2,7 @@ use shared::ErrorKind;
 
 use crate::{
     error::Result,
-    page_table::PAGE_SIZE,
+    page_table::{UserMemMut, UserMemRef, PAGE_SIZE},
     proc::ResourceDescriptor,
     resource_desc::{FileFlags, ResourceDescription},
 };
@@ -74,28 +74,45 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             crate::proc::sched_yield();
         }
         GET_RANDOM_NUM => {
+            // NOTE: Only the device actually uses user-mode memory, so this allow is only required
+            // by the `UserMemMut` constructor.
+            let allow = crate::csr::AllowUserModeMemory::allow();
             let buf_start = core::ptr::with_exposed_provenance_mut(frame.a1 as usize);
             let buf_len = frame.a2 as usize;
-            // SAFETY: TODO Check that the program is allowed to read from this buffer
-            let buf = unsafe { core::slice::from_raw_parts_mut(buf_start, buf_len) };
+            let user_buf = core::ptr::slice_from_raw_parts_mut(buf_start, buf_len);
+            // SAFETY:
+            // The buffer is in user-space, so it can't alias anything, and `allow` is
+            // dropped when we return from the syscall, so the lifetime isn't too long.
+            let Some(mut user_buf) = (unsafe { UserMemMut::for_region(user_buf, &allow) }) else {
+                frame.a1 = -1_i32 as u32;
+                frame.a2 = ErrorKind::NotPermitted as u32;
+                return;
+            };
             crate::DEVICE_TREE
                 .random
                 .lock()
                 .as_mut()
                 .unwrap()
-                .read_random(buf)
+                .read_random(&mut user_buf)
                 .unwrap();
+            frame.a1 = 0;
         }
         OPEN_NUM => {
-            // SAFETY: TODO Check that the program is allowed to read from this buffer
-            let path_name = unsafe {
-                core::slice::from_raw_parts(
-                    core::ptr::with_exposed_provenance(frame.a1 as usize),
-                    frame.a2 as usize,
-                )
+            let allow = crate::csr::AllowUserModeMemory::allow();
+            let path_buf = core::ptr::slice_from_raw_parts(
+                core::ptr::with_exposed_provenance::<u8>(frame.a1 as usize),
+                frame.a2 as usize,
+            );
+            // SAFETY:
+            // The buffer is in user-space, so it can't alias anything, and `allow` is
+            // dropped when we return from the syscall, so the lifetime isn't too long.
+            let Some(path_buf) = (unsafe { UserMemRef::for_region(path_buf, &allow) }) else {
+                frame.a1 = -1_i32 as u32;
+                frame.a2 = ErrorKind::NotPermitted as u32;
+                return;
             };
             let flags = shared::FileOpenFlags::from(frame.a3);
-            match syscall_open(path_name, flags) {
+            match syscall_open(&path_buf, flags) {
                 Ok(desc) => frame.a1 = desc as u32,
                 Err(e) => {
                     frame.a1 = -1_i32 as u32;
@@ -115,14 +132,19 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
         }
         READ_NUM => {
             let desc_num = frame.a1;
-            // SAFETY: TODO Check that the program is allowed to read from this buffer
-            let user_buf = unsafe {
-                core::slice::from_raw_parts_mut(
-                    core::ptr::with_exposed_provenance_mut::<u8>(frame.a2 as usize),
-                    frame.a3 as usize,
-                )
+            let allow = crate::csr::AllowUserModeMemory::allow();
+            let buf_start = core::ptr::with_exposed_provenance_mut(frame.a2 as usize);
+            let buf_len = frame.a3 as usize;
+            let user_buf = core::ptr::slice_from_raw_parts_mut(buf_start, buf_len);
+            // SAFETY:
+            // The buffer is in user-space, so it can't alias anything, and `allow` is
+            // dropped when we return from the syscall, so the lifetime isn't too long.
+            let Some(mut user_buf) = (unsafe { UserMemMut::for_region(user_buf, &allow) }) else {
+                frame.a1 = -1_i32 as u32;
+                frame.a2 = ErrorKind::NotPermitted as u32;
+                return;
             };
-            match syscall_read(desc_num, user_buf) {
+            match syscall_read(desc_num, &mut user_buf) {
                 Ok(read_len) => frame.a1 = read_len as u32,
                 Err(e) => {
                     frame.a1 = -1_i32 as u32;
@@ -131,13 +153,19 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             }
         }
         WRITE_NUM => {
+            let allow = crate::csr::AllowUserModeMemory::allow();
             let desc_num = frame.a1;
-            // SAFETY: TODO Check that the program is allowed to read from this buffer
-            let user_buf = unsafe {
-                core::slice::from_raw_parts(
-                    core::ptr::with_exposed_provenance::<u8>(frame.a2 as usize),
-                    frame.a3 as usize,
-                )
+            let user_buf = core::ptr::slice_from_raw_parts(
+                core::ptr::with_exposed_provenance::<u8>(frame.a2 as usize),
+                frame.a3 as usize,
+            );
+            // SAFETY:
+            // The buffer is in user-space, so it can't alias anything, and `allow` is
+            // dropped when we return from the syscall, so the lifetime isn't too long.
+            let Some(user_buf) = (unsafe { UserMemRef::for_region(user_buf, &allow) }) else {
+                frame.a1 = -1_i32 as u32;
+                frame.a2 = ErrorKind::NotPermitted as u32;
+                return;
             };
             match syscall_write(desc_num, user_buf) {
                 Ok(write_len) => frame.a1 = write_len as u32,
@@ -162,7 +190,6 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
 }
 
 fn syscall_open(path_name: &[u8], open_flags: shared::FileOpenFlags) -> Result<usize> {
-    let _allow = crate::csr::AllowUserModeMemory::allow();
     let path_name = str::from_utf8(path_name).map_err(|_| ErrorKind::InvalidFormat)?;
     // TODO Support relative paths.
     let path_name = path_name
@@ -207,7 +234,6 @@ fn syscall_open(path_name: &[u8], open_flags: shared::FileOpenFlags) -> Result<u
 }
 
 fn syscall_read(desc_num: u32, user_buf: &mut [u8]) -> Result<usize> {
-    let _allow = crate::csr::AllowUserModeMemory::allow();
     // SAFETY: We have exclusive access to this thread's running process.
     let proc = unsafe { crate::proc::current_proc() };
     // SAFETY: We can get exclusive access to the resource descriptor set.
@@ -217,15 +243,14 @@ fn syscall_read(desc_num: u32, user_buf: &mut [u8]) -> Result<usize> {
     desc.description().read(user_buf)
 }
 
-fn syscall_write(desc_num: u32, user_buf: &[u8]) -> Result<usize> {
-    let _allow = crate::csr::AllowUserModeMemory::allow();
+fn syscall_write(desc_num: u32, user_buf: UserMemRef) -> Result<usize> {
     // SAFETY: We have exclusive access to this thread's running process.
     let proc = unsafe { crate::proc::current_proc() };
     // SAFETY: We can get exclusive access to the resource descriptor set.
     let desc = unsafe { &mut *proc.resource_descriptors }[desc_num as usize]
         .as_ref()
         .ok_or(ErrorKind::NotFound)?;
-    desc.description().write(user_buf)
+    desc.description().write(&user_buf)
 }
 
 fn syscall_mmap(alloc_size: u32) -> Result<usize> {

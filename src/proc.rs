@@ -40,10 +40,12 @@ impl Process {
             .iter()
             .enumerate()
             .find(|(_, slot)| {
+                // SAFETY: TODO make this thread-safe
                 let slot = unsafe { &*slot.get() };
                 slot.state == ProcessState::Unused
             })
             .ok_or(ErrorKind::LimitReached)?;
+        // SAFETY: We picked a slot that isn't in use (TODO make this thread-safe).
         unsafe { slot.get().write(ProcessInner::create_process(image)?) };
         Ok(Process { buf_idx })
     }
@@ -54,10 +56,12 @@ impl Process {
     }
 
     fn inner(&self) -> &ProcessInner {
+        // SAFETY: We effectively own the inner data.
         unsafe { &*PROCS_BUF[self.buf_idx].get() }
     }
 
     fn inner_mut(&mut self) -> &mut ProcessInner {
+        // SAFETY: We effectively own the inner data.
         unsafe { &mut *PROCS_BUF[self.buf_idx].get() }
     }
 }
@@ -90,19 +94,24 @@ impl ProcessInner {
                 clippy::fn_to_numeric_cast_any,
                 reason = "I really want the function address"
             )]
+            // SAFETY: We allocated this stack, so we can write to it.
             unsafe {
-                pc_ptr.write(user_entry as usize)
-            };
+                pc_ptr.write(user_entry as usize);
+            }
         }
         let page_table =
             // SAFETY: Pages will never be null.
-            unsafe { core::ptr::NonNull::new_unchecked(crate::alloc::alloc_pages(1)?) };
+            unsafe { core::ptr::NonNull::new_unchecked(crate::alloc::alloc_pages_zeroed(1)?) };
+        // SAFETY:
+        // The page table for this process is valid, and mapping the kernel is always correct.
         unsafe { crate::page_table::map_kernel_memory(page_table.cast()) }?;
         const USER_PAGE_FLAGS: PageTableFlags = PageTableFlags::VALID
             .bit_or(PageTableFlags::READABLE)
             .bit_or(PageTableFlags::WRITABLE)
             .bit_or(PageTableFlags::EXECUTABLE)
             .bit_or(PageTableFlags::USER_ACCESSIBLE);
+        // SAFETY:
+        // The page table for this process is valid, and the mapping for user memory is good.
         unsafe {
             crate::page_table::alloc_and_map_slice(
                 page_table.cast(),
@@ -116,6 +125,7 @@ impl ProcessInner {
                 .div_ceil(PAGE_SIZE),
         )?
         .cast::<[Option<ResourceDescriptor>; MAX_NUM_RESOURCE_DESCRIPTORS]>();
+        // SAFETY: We just allocated the memory, so we can write to it.
         unsafe {
             resource_descriptors.write([const { None }; MAX_NUM_RESOURCE_DESCRIPTORS]);
         }
@@ -132,7 +142,9 @@ impl ProcessInner {
         })
     }
 }
+// SAFETY: Processes can move between threads.
 unsafe impl Send for ProcessInner {}
+// SAFETY: Processes can move between threads.
 unsafe impl Sync for ProcessInner {}
 
 pub(crate) const MAX_NUM_RESOURCE_DESCRIPTORS: usize = 1024;
@@ -171,6 +183,7 @@ fn next_proc_to_run(current_proc: &Process) -> usize {
         if slot == current_proc.buf_idx {
             return false;
         }
+        // SAFETY: Changing the active process can invalidate this whole buffer.
         let proc = unsafe { &*proc.get() };
         if proc.state != ProcessState::Runnable {
             return false;
@@ -186,12 +199,13 @@ fn next_proc_to_run(current_proc: &Process) -> usize {
     //
     // TODO We should cache this result, since it won't change.
     if let Some((next_proc_slot, _)) = PROCS_BUF.iter().enumerate().find(|&(_, proc)| {
+        // SAFETY: Changing the active process can invalidate this whole buffer.
         let proc = unsafe { &*proc.get() };
         proc.state == ProcessState::Idle
     }) {
         return next_proc_slot;
     }
-    todo!("Nothing runnable right now");
+    unreachable!("Nothing runnable");
 }
 
 pub fn sched_yield() {
@@ -203,12 +217,18 @@ pub fn sched_yield() {
         let mut next_proc = Process {
             buf_idx: next_slot_idx,
         };
+        // SAFETY:
+        // `current_proc` is what's currently running, and `new_proc` was chosen to be runnable.
         unsafe { switch_context(&mut current_proc, &mut next_proc) }
     }
 }
 
 /// Get the PID of the currently-active process.
+///
+/// Note that this invalidates any references to [`current_proc()`].
 pub fn current_pid() -> u32 {
+    // SAFETY:
+    // Reference is valid and method precondition allows invalidating any other references.
     unsafe { current_proc() }.pid
 }
 
@@ -219,6 +239,8 @@ pub fn current_pid() -> u32 {
 ///
 /// TODO Support thread-safety in multithreading.
 pub(crate) unsafe fn current_proc<'a>() -> &'a mut ProcessInner {
+    // SAFETY:
+    // Method precondition indicates how long the reference can be made to exist.
     unsafe { &mut *PROCS_BUF[CURRENT_PROC_SLOT.load(core::sync::atomic::Ordering::Relaxed)].get() }
 }
 
@@ -234,6 +256,9 @@ pub unsafe fn switch_context(old_proc: &mut Process, new_proc: &mut Process) {
         "New process should be runnable"
     );
     let next_proc_stack_bottom = new_proc.inner().kernel_stack.wrapping_add(1).cast::<()>();
+    // SAFETY:
+    // We set the page table to the new process's page table. Kernel addresses are the same in all
+    // page tables, so kernel code isn't impacted.
     unsafe {
         crate::csr::write_csr!(sscratch = next_proc_stack_bottom);
         core::arch::asm!("sfence.vma");
@@ -243,6 +268,8 @@ pub unsafe fn switch_context(old_proc: &mut Process, new_proc: &mut Process) {
     CURRENT_PROC_SLOT.store(new_proc.buf_idx, core::sync::atomic::Ordering::Relaxed);
     let old_sp = &mut old_proc.inner_mut().sp;
     let new_sp = &mut new_proc.inner_mut().sp;
+    // SAFETY:
+    // We've parsed the stack pointers from the two processes correctly.
     unsafe { switch_context_inner(old_sp, new_sp) };
 }
 

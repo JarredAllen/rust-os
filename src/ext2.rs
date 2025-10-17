@@ -40,6 +40,7 @@ impl<'a> Ext2<'a> {
         )]
         let alloc = self.superblock.as_ref();
         let superblock = core::ptr::from_ref(alloc).cast::<Superblock>();
+        // SAFETY: We initialize this block to a valid value on construction.
         unsafe { superblock.read() }
     }
 
@@ -94,15 +95,15 @@ impl<'a> Ext2<'a> {
 
     /// Get the inode number for a specific path, if present.
     pub fn lookup_path<'path>(
-    &mut self,
-    path_parts: impl IntoIterator<Item = &'path str>,
-) -> Option<u32> {
-    let mut inode_num = 2;
-    for part in path_parts {
-        inode_num = self.read_dir(inode_num).find_for_name(part)?.inode_num;
+        &mut self,
+        path_parts: impl IntoIterator<Item = &'path str>,
+    ) -> Option<u32> {
+        let mut inode_num = 2;
+        for part in path_parts {
+            inode_num = self.read_dir(inode_num).find_for_name(part)?.inode_num;
+        }
+        Some(inode_num)
     }
-    Some(inode_num)
-}
 
     pub fn read_file_from_offset(
         &mut self,
@@ -221,8 +222,8 @@ impl<'a> Ext2<'a> {
         }
         self.fs.write_sector(
             contents,
-            block_num as u64 * superblock.sectors_per_block() as u64
-                + sector_num as u64 % superblock.sectors_per_block() as u64,
+            u64::from(block_num) * u64::from(superblock.sectors_per_block())
+                + u64::from(sector_num) % u64::from(superblock.sectors_per_block()),
         )?;
         Ok(())
     }
@@ -243,6 +244,8 @@ impl<'a> Ext2<'a> {
         let desc_ptr = core::ptr::from_ref(&buf)
             .cast::<BlockGroupDescriptor>()
             .wrapping_add(group_num as usize % DESCS_PER_SECTOR);
+        // SAFETY:
+        // We just read the value from disk to this memory, so we can read it.
         unsafe { desc_ptr.read_unaligned() }
     }
 
@@ -251,16 +254,16 @@ impl<'a> Ext2<'a> {
     /// This takes extra time to read the whole block, so only use this method if you actually need
     /// to get the whole block.
     fn read_block(&mut self, block_num: u32) -> KByteBuf {
-    let mut buf =
-        KByteBuf::new_zeroed(self.superblock().block_size() as usize).expect("Out of memory");
-    let start_sector = u64::from(block_num) * u64::from(self.superblock().sectors_per_block());
-    for (sector_in_block, buf) in buf.as_chunks_mut().0.iter_mut().enumerate() {
-        self.fs
-            .read_sector(buf, start_sector + sector_in_block as u64)
-            .expect("Failed to read sector of block");
+        let mut buf =
+            KByteBuf::new_zeroed(self.superblock().block_size() as usize).expect("Out of memory");
+        let start_sector = u64::from(block_num) * u64::from(self.superblock().sectors_per_block());
+        for (sector_in_block, buf) in buf.as_chunks_mut().0.iter_mut().enumerate() {
+            self.fs
+                .read_sector(buf, start_sector + sector_in_block as u64)
+                .expect("Failed to read sector of block");
+        }
+        buf
     }
-    buf
-}
 
     fn set_inode_length_at_least(&mut self, inode_num: u32, min_length: u64) -> Result<()> {
         let superblock = self.superblock();
@@ -275,33 +278,35 @@ impl<'a> Ext2<'a> {
 
         let inodes_per_sector = 512 / superblock.inode_size;
 
-        let inode_sector = inode_block as u64 * (2 << superblock.block_size_raw)
-            + ((inode_num.saturating_sub(1) % superblock.inodes_per_block())
-                / inodes_per_sector as u32) as u64;
+        let inode_sector = u64::from(inode_block) * (2 << superblock.block_size_raw)
+            + u64::from(
+                (inode_num.saturating_sub(1) % superblock.inodes_per_block())
+                    / u32::from(inodes_per_sector),
+            );
 
         let buf = &mut [0; 512];
-        self.fs
-            .read_sector(buf, inode_sector)
-            .expect("Failed to read inode");
+        self.fs.read_sector(buf, inode_sector)?;
 
         let inode_index_in_sector = (inode_num.saturating_sub(1) as usize
             % inodes_per_sector as usize)
             * superblock.inode_size as usize;
 
+        #[expect(clippy::cast_ptr_alignment, reason = "Following read is unaligned")]
         let inode_ptr = core::ptr::from_mut(buf)
             .cast::<Inode>()
             .wrapping_byte_add(inode_index_in_sector);
 
+        // SAFETY: We just read the inode value here from disk.
         let mut inode = unsafe { core::ptr::read_unaligned(inode_ptr) };
-        let old_size = inode.size_lower as u64 | ((inode.size_upper_or_directory_acl as u64) << 32);
+        let old_size =
+            u64::from(inode.size_lower) | (u64::from(inode.size_upper_or_directory_acl) << 32);
         if min_length > old_size {
             log::info!("increasing file length from {old_size} to {min_length}");
             inode.size_lower = min_length as u32;
             inode.size_upper_or_directory_acl = (min_length >> 32) as u32;
+            // SAFETY: `inode_ptr` points into a buffer we just read from, so we can write to it.
             unsafe { inode_ptr.write_unaligned(inode) };
-            self.fs
-                .write_sector(buf, inode_sector)
-                .expect("Failed to read inode");
+            self.fs.write_sector(buf, inode_sector)?;
         } else {
             log::info!("Not increasing file length from {old_size} to {min_length}");
         }
@@ -318,11 +323,14 @@ impl DirectoryEntryIter {
         if self.idx >= self.buf.len() {
             return None;
         }
+        #[expect(clippy::cast_ptr_alignment, reason = "KByteBuf has higher alignment")]
         let entry_ptr = self
             .buf
             .as_ptr()
             .wrapping_byte_add(self.idx)
             .cast::<DirectoryEntryHeader>();
+        // SAFETY:
+        // If the filesystem is valid, then the memory if correct for this.
         self.idx += unsafe { &*entry_ptr }.entry_size as usize;
         // SAFETY:
         // If the filesystem is valid, then the memory is correct for this. And the return lifetime is tied to `self`, so it is valid for that long.
@@ -554,6 +562,7 @@ impl DirectoryEntry {
     /// `header_ptr` must be valid for reading for `'a`, and also have provenance for the name
     /// section that follows.
     unsafe fn for_header<'a>(header_ptr: *const DirectoryEntryHeader) -> &'a Self {
+        // SAFETY: By precondition, this is a valid header.
         let len = unsafe { &*header_ptr }.name_len as usize;
         // We make a pointer to the value by first artificially constructing a pointer to a slice
         // with the right length. The slice pointer has the same format, so we can transmute.

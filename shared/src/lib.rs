@@ -63,6 +63,12 @@ pub enum ErrorKind {
     InvalidFormat = 5,
     /// The operation hit some resource limit.
     LimitReached = 6,
+    /// The process does not have permission to do this operation.
+    ///
+    /// The lack of permission may be for the call as a whole, or for a specific resource which the
+    /// process doesn't have permission to act upon (such as calling `read` on memory the process
+    /// can't write to).
+    NotPermitted = 7,
 }
 impl ErrorKind {
     /// Get the error kind from a number.
@@ -75,6 +81,7 @@ impl ErrorKind {
             4 => Self::NotFound,
             5 => Self::InvalidFormat,
             6 => Self::LimitReached,
+            7 => Self::NotPermitted,
             _ => return None,
         })
     }
@@ -88,6 +95,7 @@ impl core::fmt::Display for ErrorKind {
             Self::NotFound => "Requested entity not found",
             Self::InvalidFormat => "Supplied data did not match expected format",
             Self::LimitReached => "Process reached resource limit",
+            Self::NotPermitted => "Operation not permitted",
         })
     }
 }

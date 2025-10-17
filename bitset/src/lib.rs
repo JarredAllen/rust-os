@@ -50,6 +50,11 @@ macro_rules! bitset {
                         (self.0 & other.0) == other.0
                     }
 
+                    /// Get whether we contain any bit set in `other`.
+                    pub const fn contains_any(self, other: Self) -> bool {
+                        (self.0 | other.0) != 0
+                    }
+
                     $(
                         $( #[$bit_meta] )*
                         pub const fn [< $bit:snake:lower >](self) -> bool {

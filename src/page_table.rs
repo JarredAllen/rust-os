@@ -179,34 +179,153 @@ pub unsafe fn alloc_and_map_slice(
                 flags,
             )
         }?;
-        // Write to `paddr` because it's also the address in kernel memory.
+        // SAFETY: We just allocated the page, so we can write to it.
+        //
+        // We write to `paddr` because it's also the address in kernel memory.
         let page = unsafe { &mut *core::ptr::with_exposed_provenance_mut::<[u8; 4096]>(paddr) };
         page[..data.len()].copy_from_slice(data);
     }
     Ok(())
 }
 
-/// Get the physical address for a given virtual address.
-#[inline(never)]
-pub fn paddr_for_vaddr<T: ?Sized>(vaddr: *mut T) -> PhysicalAddress {
+/// Get the page table entry for the given virtual address.
+fn entry_for_vaddr(vaddr: *const ()) -> Option<PageTableEntry> {
     if let Some(page_table) = crate::csr::current_page_table() {
-        // TODO Handle virtual addresses that aren't mapped.
-        // TODO Handle large pages.
         let vaddr = vaddr.addr();
         let vpn1 = (vaddr >> 22) & 0x3ff;
         let vpn2 = (vaddr >> 12) & 0x3ff;
-        let offset_in_page = vaddr & 0xfff;
-        let table0 = core::ptr::without_provenance::<PageTable>(
-            unsafe { page_table.as_ref() }.entries[vpn1]
-                .physical_addr()
-                .0,
-        );
         // SAFETY:
         // If `current_page_table` isn't a valid page table, we've already had bigger problems.
-        let entry = unsafe { &*table0 }.entries[vpn2];
-        entry.physical_addr().byte_add(offset_in_page)
+        let entry1 = unsafe { page_table.as_ref() }.entries[vpn1];
+        if !entry1.flags().valid() {
+            // The page wasn't set up.
+            return None;
+        }
+        if !entry1.flags().contains_any(
+            PageTableFlags::READABLE
+                | PageTableFlags::WRITABLE
+                | PageTableFlags::EXECUTABLE
+                | PageTableFlags::USER_ACCESSIBLE,
+        ) {
+            todo!("Handle large pages");
+        }
+        let table0 = core::ptr::without_provenance::<PageTable>(entry1.physical_addr().0);
+        // SAFETY:
+        // If `current_page_table` isn't a valid page table, we've already had bigger problems.
+        Some(unsafe { &*table0 }.entries[vpn2])
+    } else {
+        None
+    }
+}
+
+/// Get the physical address for a given virtual address.
+#[inline(never)]
+pub fn paddr_for_vaddr<T: ?Sized>(vaddr: *mut T) -> PhysicalAddress {
+    if crate::csr::current_page_table().is_some() {
+        let Some(page_table_entry) = entry_for_vaddr(vaddr.cast()) else {
+            todo!("Handle `vaddr` without a paddr");
+        };
+        let offset_in_page = vaddr.addr() & 0xfff;
+        page_table_entry.physical_addr().byte_add(offset_in_page)
     } else {
         PhysicalAddress(vaddr.addr())
+    }
+}
+
+/// Check that the given range of virtual addresses has the given flags set for all of its memory.
+pub fn check_range_has_flags(vaddr_range: *const [u8], flags: PageTableFlags) -> bool {
+    let start_vaddr = vaddr_range.addr() & !0xfff;
+    let end_vaddr = vaddr_range.addr() + vaddr_range.len();
+    for page_start_vaddr in (start_vaddr..end_vaddr).step_by(PAGE_SIZE) {
+        let Some(entry) = entry_for_vaddr(core::ptr::without_provenance(page_start_vaddr)) else {
+            return false;
+        };
+        if !entry.flags().contains(flags) {
+            return false;
+        }
+    }
+    true
+}
+
+/// A read-only reference to a region of user-space memory.
+#[derive(Copy, Clone)]
+pub struct UserMemRef<'a>(&'a [u8]);
+impl<'a> UserMemRef<'a> {
+    /// Construct a value for the given region.
+    ///
+    /// # Safety
+    /// The resulting lifetime must be valid for the memory access.
+    pub unsafe fn for_region(
+        memory: *const [u8],
+        _allow: &'a crate::csr::AllowUserModeMemory,
+    ) -> Option<Self> {
+        if !check_range_has_flags(
+            memory,
+            PageTableFlags::VALID | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::READABLE,
+        ) {
+            return None;
+        }
+        // SAFETY: By method precondition, this is valid.
+        Some(Self(unsafe { &*memory }))
+    }
+}
+impl AsRef<[u8]> for UserMemRef<'_> {
+    fn as_ref(&self) -> &[u8] {
+        self.0
+    }
+}
+impl core::ops::Deref for UserMemRef<'_> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+/// A read-write reference to a region of user-space memory.
+pub struct UserMemMut<'a>(&'a mut [u8]);
+impl<'a> UserMemMut<'a> {
+    /// Construct a value for the given region.
+    ///
+    /// # Safety
+    /// The resulting lifetime must be valid for the memory access.
+    pub unsafe fn for_region(
+        memory: *mut [u8],
+        _allow: &'a crate::csr::AllowUserModeMemory,
+    ) -> Option<Self> {
+        if !check_range_has_flags(
+            memory,
+            PageTableFlags::VALID
+                | PageTableFlags::USER_ACCESSIBLE
+                | PageTableFlags::READABLE
+                | PageTableFlags::WRITABLE,
+        ) {
+            return None;
+        }
+        // SAFETY: By method precondition, this is valid.
+        Some(Self(unsafe { &mut *memory }))
+    }
+}
+impl AsRef<[u8]> for UserMemMut<'_> {
+    fn as_ref(&self) -> &[u8] {
+        self.0
+    }
+}
+impl AsMut<[u8]> for UserMemMut<'_> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.0
+    }
+}
+impl core::ops::Deref for UserMemMut<'_> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+impl core::ops::DerefMut for UserMemMut<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
     }
 }
 
