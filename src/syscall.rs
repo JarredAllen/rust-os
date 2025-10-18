@@ -2,7 +2,7 @@ use shared::ErrorKind;
 
 use crate::{
     error::Result,
-    page_table::{UserMemMut, UserMemRef, PAGE_SIZE},
+    page_table::{UserMemMut, UserMemMutOpaque, UserMemRef, PAGE_SIZE},
     proc::ResourceDescriptor,
     resource_desc::{FileFlags, ResourceDescription},
 };
@@ -74,16 +74,13 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             crate::proc::sched_yield();
         }
         GET_RANDOM_NUM => {
-            // NOTE: Only the device actually uses user-mode memory, so this allow is only required
-            // by the `UserMemMut` constructor.
-            let allow = crate::csr::AllowUserModeMemory::allow();
             let buf_start = core::ptr::with_exposed_provenance_mut(frame.a1 as usize);
             let buf_len = frame.a2 as usize;
             let user_buf = core::ptr::slice_from_raw_parts_mut(buf_start, buf_len);
             // SAFETY:
-            // The buffer is in user-space, so it can't alias anything, and `allow` is
-            // dropped when we return from the syscall, so the lifetime isn't too long.
-            let Some(mut user_buf) = (unsafe { UserMemMut::for_region(user_buf, &allow) }) else {
+            // The buffer is in user-space, so it can't alias anything, we drop it when we return
+            // from the syscall, so the lifetime isn't too long.
+            let Some(user_buf) = (unsafe { UserMemMutOpaque::for_region(user_buf) }) else {
                 frame.a1 = -1_i32 as u32;
                 frame.a2 = ErrorKind::NotPermitted as u32;
                 return;
@@ -93,7 +90,7 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
                 .lock()
                 .as_mut()
                 .unwrap()
-                .read_random(&mut user_buf)
+                .read_random(user_buf)
                 .unwrap();
             frame.a1 = 0;
         }

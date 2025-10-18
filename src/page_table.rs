@@ -293,15 +293,8 @@ impl<'a> UserMemMut<'a> {
         memory: *mut [u8],
         _allow: &'a crate::csr::AllowUserModeMemory,
     ) -> Option<Self> {
-        if !check_range_has_flags(
-            memory,
-            PageTableFlags::VALID
-                | PageTableFlags::USER_ACCESSIBLE
-                | PageTableFlags::READABLE
-                | PageTableFlags::WRITABLE,
-        ) {
-            return None;
-        }
+        // SAFETY: We have exclusive access, and we drop the `Opaque`.
+        let UserMemMutOpaque(memory) = unsafe { UserMemMutOpaque::for_region(memory)? };
         // SAFETY: By method precondition, this is valid.
         Some(Self(unsafe { &mut *memory }))
     }
@@ -326,6 +319,55 @@ impl core::ops::Deref for UserMemMut<'_> {
 impl core::ops::DerefMut for UserMemMut<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0
+    }
+}
+
+/// A read-write reference to a region of user-space memory.
+pub struct UserMemMutOpaque(*mut [u8]);
+impl UserMemMutOpaque {
+    /// Construct a value for the given region.
+    ///
+    /// # Safety
+    /// The resulting value must only be kept for as long as nothing else accesses the memory.
+    pub unsafe fn for_region(memory: *mut [u8]) -> Option<Self> {
+        if !check_range_has_flags(
+            memory,
+            PageTableFlags::VALID
+                | PageTableFlags::USER_ACCESSIBLE
+                | PageTableFlags::READABLE
+                | PageTableFlags::WRITABLE,
+        ) {
+            return None;
+        }
+        Some(Self(memory))
+    }
+
+    /// Get the raw pointer to the memory.
+    ///
+    /// This method is always safe, but the pointer is not guaranteed to be writable. In fact,
+    /// unless something else forces user-space memory to be writable, writes to this memory from
+    /// the kernel will hit a page fault.
+    pub fn as_ptr(&self) -> *mut [u8] {
+        self.0
+    }
+
+    /// Get the length of this memory region.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Get a subslice starting at the given index.
+    ///
+    /// # Panics
+    /// Panics if the range start is out-of-bounds for `self`.
+    pub fn range_from(&self, range: core::ops::RangeFrom<usize>) -> Self {
+        Self(core::ptr::slice_from_raw_parts_mut(
+            self.0.cast::<u8>().wrapping_add(range.start),
+            self.0
+                .len()
+                .checked_sub(range.start)
+                .expect("Index out of bounds"),
+        ))
     }
 }
 

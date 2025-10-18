@@ -175,7 +175,7 @@ impl VirtioRandom<'_> {
     ///
     /// This function assumes the buffer is in kernel memory (i.e. the physical and virtual
     /// addresses are the same).
-    pub fn read_random(&mut self, mut buf: &mut [u8]) -> Result<()> {
+    pub fn read_random(&mut self, mut buf: crate::page_table::UserMemMutOpaque) -> Result<()> {
         #![expect(
             clippy::unwrap_in_result,
             reason = "should be initialized in constructor"
@@ -196,7 +196,7 @@ impl VirtioRandom<'_> {
             // SAFETY: We have exclusive access, so we can write to the queue.
             unsafe {
                 desc.write_volatile(VirtQueueDescriptor {
-                    address: crate::page_table::paddr_for_vaddr(core::ptr::from_mut(buf)).0 as u64,
+                    address: crate::page_table::paddr_for_vaddr(buf.as_ptr()).0 as u64,
                     length: buf.len() as u32,
                     flags: DescriptorFlags::WRITE,
                     next: 0,
@@ -218,7 +218,7 @@ impl VirtioRandom<'_> {
                 }
                 return Ok(());
             }
-            buf = &mut buf[used.length as usize..];
+            buf = buf.range_from(used.length as usize..);
             crate::proc::sched_yield();
         }
     }
