@@ -27,6 +27,8 @@ pub enum Syscall {
     Write = 10,
     /// Map a new memory region.
     Mmap = 11,
+    /// Unmap a memory region.
+    Munmap = 12,
 }
 
 bitset::bitset!(

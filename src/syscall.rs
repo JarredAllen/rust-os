@@ -18,6 +18,7 @@ const CLOSE_NUM: u32 = shared::Syscall::Close as u32;
 const READ_NUM: u32 = shared::Syscall::Read as u32;
 const WRITE_NUM: u32 = shared::Syscall::Write as u32;
 const MMAP_NUM: u32 = shared::Syscall::Mmap as u32;
+const MUNMAP_NUM: u32 = shared::Syscall::Munmap as u32;
 
 pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
     #![allow(
@@ -179,10 +180,21 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             match syscall_mmap(alloc_size) {
                 Ok(start_user_vaddr) => frame.a1 = start_user_vaddr as u32,
                 Err(e) => {
-                    frame.a1 = 0;
+                    frame.a1 = -1_i32 as u32;
                     frame.a2 = e.kind as u32;
                 }
             }
+        }
+        MUNMAP_NUM => {
+            #[expect(unused, reason = "Will be used once TODO is done")]
+            let alloc_addr = frame.a1;
+            #[expect(unused, reason = "Will be used once TODO is done")]
+            let alloc_size = frame.a2;
+            // TODO Unmap and free the pages
+            //
+            // This is technically okay but wasteful because we could reuse these pages but we
+            // won't.
+            frame.a1 = 0;
         }
         number => panic!("Unrecognized syscall {number}"), // TODO don't panic here
     }

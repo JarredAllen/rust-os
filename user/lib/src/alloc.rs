@@ -51,7 +51,12 @@ impl Allocator {
         }
         let size = layout.size().max(layout.align());
         let Some((size_class, raw_size)) = class_for_size(size) else {
-            todo!("`mmap`-backed allocation");
+            if layout.align() > 4096 {
+                todo!("greater than page alignment");
+            }
+            return crate::sys::mmap(size)
+                .map(|head_ptr| NonNull::slice_from_raw_parts(head_ptr.cast::<u8>(), size))
+                .ok();
         };
         // SAFETY:
         // `class_for_size` always returns the same size for a given size class, so we meet the
@@ -70,7 +75,10 @@ impl Allocator {
         }
         let size = layout.size().max(layout.align());
         let Some((size_class, _raw_size)) = class_for_size(size) else {
-            todo!("`mmap`-backed allocation");
+            // SAFETY:
+            // For this layout, we called `mmap` to allocate, so we can call `munmap` to free.
+            _ = unsafe { crate::sys::munmap(ptr, size) };
+            return;
         };
         // SAFETY:
         // We allocated from the same size class originally.

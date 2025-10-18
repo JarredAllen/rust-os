@@ -3,6 +3,8 @@
 //! The eventual goal is to implement convenient wrappers around these functions in a way that
 //! resembles the convenience of the stdlib, sorted by module.
 
+use core::ptr::NonNull;
+
 pub use shared::Syscall;
 
 /// Write a char to the console.
@@ -127,11 +129,37 @@ pub(crate) fn write(descriptor_num: i32, buf: &[u8]) -> Result<usize, shared::Er
     Ok(write_len as usize)
 }
 
-pub(crate) fn mmap(size: usize) -> Result<core::ptr::NonNull<()>, shared::ErrorKind> {
+/// Request the kernel map more pages for us.
+///
+/// `size` is the minimum requested size, in bytes. The kernel might give more memory than that,
+/// but presently it has no way to signal that it did so.
+pub(crate) fn mmap(size: usize) -> Result<NonNull<()>, shared::ErrorKind> {
     // SAFETY: This matches the definition of this syscall.
     let (addr, err) = unsafe { syscall(Syscall::Mmap as u32, [size as u32, 0, 0]) };
-    core::ptr::NonNull::new(core::ptr::without_provenance_mut(addr as usize))
-        .ok_or_else(|| err.unwrap())
+    NonNull::new(core::ptr::without_provenance_mut(addr as usize)).ok_or_else(|| err.unwrap())
+}
+
+/// Unmap pages that were allocated via [`mmap`].
+///
+/// # Safety
+/// `addr` must exactly match an address returned by `mmap`, and `size` must exactly match the
+/// `size` value from that call to `mmap`. Additionally, there must be no remaining references to
+/// that memory.
+pub(crate) unsafe fn munmap(addr: NonNull<()>, size: usize) -> Result<(), shared::ErrorKind> {
+    // SAFETY:
+    // Because this memory region was `mmap`ed (see preconditions on this function), and nothing in
+    // user memory is still using it, we can safely ask the kernel to unmap it.
+    let (ok, err) = unsafe {
+        syscall(
+            Syscall::Munmap as u32,
+            [addr.addr().get() as u32, size as u32, 0],
+        )
+    };
+    match (ok, err) {
+        (0, _) => Ok(()),
+        (0xFFFF_FFFF_u32, Some(err)) => Err(err),
+        _ => unreachable!(),
+    }
 }
 
 /// Perform an arbitrary syscall.
