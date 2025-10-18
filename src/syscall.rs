@@ -124,8 +124,10 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
             let proc = unsafe { crate::proc::current_proc() };
             // SAFETY: We can get exclusive access to the resource descriptor set.
             let desc = &mut unsafe { &mut *proc.resource_descriptors }[desc_num as usize];
-            assert!(desc.is_some());
-            *desc = None;
+            if desc.take().is_none() {
+                frame.a1 = -1_i32 as u32;
+                frame.a2 = ErrorKind::NotFound as u32;
+            }
         }
         READ_NUM => {
             let desc_num = frame.a1;
