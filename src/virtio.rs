@@ -196,7 +196,9 @@ impl VirtioRandom<'_> {
             // SAFETY: We have exclusive access, so we can write to the queue.
             unsafe {
                 desc.write_volatile(VirtQueueDescriptor {
-                    address: crate::page_table::paddr_for_vaddr(buf.as_ptr()).0 as u64,
+                    // `UserMemMutOpaque` already checked that the memory is allocated
+                    address: crate::page_table::paddr_for_vaddr(buf.as_ptr()).unwrap().0 as u64,
+                    // TODO check if allocation is split among multiple pages.
                     length: buf.len() as u32,
                     flags: DescriptorFlags::WRITE,
                     next: 0,

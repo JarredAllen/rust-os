@@ -220,15 +220,13 @@ fn entry_for_vaddr(vaddr: *const ()) -> Option<PageTableEntry> {
 
 /// Get the physical address for a given virtual address.
 #[inline(never)]
-pub fn paddr_for_vaddr<T: ?Sized>(vaddr: *mut T) -> PhysicalAddress {
+pub fn paddr_for_vaddr<T: ?Sized>(vaddr: *mut T) -> Option<PhysicalAddress> {
     if crate::csr::current_page_table().is_some() {
-        let Some(page_table_entry) = entry_for_vaddr(vaddr.cast()) else {
-            todo!("Handle `vaddr` without a paddr");
-        };
+        let page_table_entry = entry_for_vaddr(vaddr.cast())?;
         let offset_in_page = vaddr.addr() & 0xfff;
-        page_table_entry.physical_addr().byte_add(offset_in_page)
+        Some(page_table_entry.physical_addr().byte_add(offset_in_page))
     } else {
-        PhysicalAddress(vaddr.addr())
+        Some(PhysicalAddress(vaddr.addr()))
     }
 }
 
