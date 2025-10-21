@@ -1,6 +1,7 @@
 //! Types for handling traps.
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct TrapFrame {
     pub ra: u32,
     pub gp: u32,

@@ -1,6 +1,8 @@
 //! Utilities for input/output
 
-use core::{fmt, marker::PhantomData, sync::atomic::AtomicBool};
+use core::{fmt, sync::atomic::AtomicBool};
+
+use crate::rd::BorrowedResourceDescriptor;
 
 /// Write to standard output.
 #[macro_export]
@@ -27,7 +29,7 @@ macro_rules! println {
 /// Temporary ownership over the standard output stream.
 #[must_use = "`Stdout` objects are only useful for writing to"]
 pub struct Stdout<'a> {
-    phantom: PhantomData<&'a mut ()>,
+    rd: BorrowedResourceDescriptor<'a>,
 }
 impl Stdout<'_> {
     /// Lock the standard output stream so writing can happen.
@@ -47,7 +49,7 @@ impl Stdout<'_> {
             None
         } else {
             Some(Self {
-                phantom: PhantomData,
+                rd: BorrowedResourceDescriptor::from_raw(1),
             })
         }
     }
@@ -61,7 +63,7 @@ impl Stdout<'_> {
     pub unsafe fn force_lock() -> Self {
         STDOUT_LOCK.store(true, core::sync::atomic::Ordering::Relaxed);
         Self {
-            phantom: PhantomData,
+            rd: BorrowedResourceDescriptor::from_raw(1),
         }
     }
 }
@@ -72,12 +74,11 @@ impl Drop for Stdout<'_> {
 }
 impl fmt::Write for Stdout<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        crate::sys::putstr(s);
-        Ok(())
-    }
-
-    fn write_char(&mut self, c: char) -> fmt::Result {
-        crate::sys::putchar(c);
+        let mut s = s.as_bytes();
+        while !s.is_empty() {
+            let len = crate::sys::write(self.rd.raw(), s).map_err(|_| fmt::Error)?;
+            s = &s[len..];
+        }
         Ok(())
     }
 }

@@ -7,8 +7,6 @@ use crate::{
     resource_desc::{FileFlags, ResourceDescription},
 };
 
-const PUT_CHAR_NUM: u32 = shared::Syscall::PutChar as u32;
-const GET_CHAR_NUM: u32 = shared::Syscall::GetChar as u32;
 const GET_PID_NUM: u32 = shared::Syscall::GetPid as u32;
 const SCHED_YIELD_NUM: u32 = shared::Syscall::SchedYield as u32;
 const EXIT_NUM: u32 = shared::Syscall::Exit as u32;
@@ -26,26 +24,6 @@ pub fn handle_syscall(frame: &mut crate::trap::TrapFrame) {
         reason = "We need to branch for every syscall here"
     )]
     match frame.a0 {
-        PUT_CHAR_NUM => {
-            if let Some(c) = char::from_u32(frame.a1) {
-                _ = crate::sbi::putchar(c);
-            }
-        }
-        GET_CHAR_NUM => {
-            loop {
-                match crate::sbi::getchar() {
-                    Ok(Some(c)) => {
-                        frame.a1 = c.get() as u32;
-                        break;
-                    }
-                    Ok(None) => {}
-                    Err(_e) => {
-                        // TODO log the error
-                    }
-                }
-                crate::proc::sched_yield();
-            }
-        }
         GET_PID_NUM => {
             frame.a1 = crate::proc::current_pid();
         }

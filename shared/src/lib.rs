@@ -5,10 +5,6 @@
 /// The syscall types supported by the kernel.
 #[repr(u32)]
 pub enum Syscall {
-    /// Write a character to the console.
-    PutChar = 1,
-    /// Read a character from the console.
-    GetChar = 2,
     /// Get the PID of the current process.
     GetPid = 3,
     /// Yield to let another process run.
@@ -71,6 +67,8 @@ pub enum ErrorKind {
     /// process doesn't have permission to act upon (such as calling `read` on memory the process
     /// can't write to).
     NotPermitted = 7,
+    /// Some other error happened.
+    Other = u32::MAX,
 }
 impl ErrorKind {
     /// Get the error kind from a number.
@@ -84,6 +82,7 @@ impl ErrorKind {
             5 => Self::InvalidFormat,
             6 => Self::LimitReached,
             7 => Self::NotPermitted,
+            u32::MAX => Self::Other,
             _ => return None,
         })
     }
@@ -98,6 +97,7 @@ impl core::fmt::Display for ErrorKind {
             Self::InvalidFormat => "Supplied data did not match expected format",
             Self::LimitReached => "Process reached resource limit",
             Self::NotPermitted => "Operation not permitted",
+            Self::Other => "Some other error",
         })
     }
 }

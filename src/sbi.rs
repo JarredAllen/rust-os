@@ -110,3 +110,14 @@ impl Error {
         })
     }
 }
+impl From<Error> for crate::error::Error {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::NotSupported => shared::ErrorKind::Unsupported,
+            Error::Io => shared::ErrorKind::Io,
+            Error::Denied => shared::ErrorKind::NotPermitted,
+            _ => shared::ErrorKind::Other,
+        }
+        .into()
+    }
+}

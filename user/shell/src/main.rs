@@ -12,7 +12,7 @@ extern "Rust" fn main() {
     let mut line_buf = alloc::vec::Vec::<u8>::new();
     print!("> ");
     loop {
-        match userlib::sys::getchar() {
+        match userlib::sys::getchar().unwrap() {
             // On newline, run the queued command
             '\r' | '\n' => {
                 let cmd = str::from_utf8(&line_buf).expect("Invalid utf-8");
@@ -52,7 +52,7 @@ extern "Rust" fn main() {
                             .next()
                             .map_or(16, |s| s.parse().expect("Invalid number"));
                         let mut buf = alloc::vec![0_u8; len];
-                        userlib::sys::get_random(&mut buf);
+                        userlib::sys::get_random(&mut buf).expect("Failed to get random data");
                         for byte in buf {
                             print!("{byte:02X}");
                         }
@@ -106,7 +106,7 @@ extern "Rust" fn main() {
             //
             // TODO Handle other special characters
             c => {
-                userlib::sys::putchar(c);
+                print!("{c}");
                 line_buf.push(u8::try_from(c).expect("Non-u8 character"));
             }
         }

@@ -13,29 +13,43 @@ pub struct ResourceDescription {
 impl ResourceDescription {
     /// Create a new descriptor for the given file data.
     pub const fn for_file(file_data: FileResourceDescriptionData) -> Self {
-    Self {
-        vtable: RawResourceDescriptionVTable::FILE_VTABLE,
-        data: ResourceDescriptionData { file: file_data },
+        Self {
+            vtable: RawResourceDescriptionVTable::FILE_VTABLE,
+            data: ResourceDescriptionData { file: file_data },
+        }
     }
-}
+
+    pub const fn for_console_in() -> Self {
+        Self {
+            vtable: RawResourceDescriptionVTable::CONSOLE_IN_VTABLE,
+            data: ResourceDescriptionData { null: () },
+        }
+    }
+
+    pub const fn for_console_out() -> Self {
+        Self {
+            vtable: RawResourceDescriptionVTable::CONSOLE_OUT_VTABLE,
+            data: ResourceDescriptionData { null: () },
+        }
+    }
 
     /// Read from the given resource.
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-    // SAFETY: We keep the vtable and the value together to meet the precondition.
-    unsafe { (self.vtable.read)(&mut self.data, buf) }
-}
+        // SAFETY: We keep the vtable and the value together to meet the precondition.
+        unsafe { (self.vtable.read)(&mut self.data, buf) }
+    }
 
     /// Write to the given resource.
     pub fn write(&mut self, buf: &[u8]) -> Result<usize> {
-    // SAFETY: We keep the vtable and the value together to meet the precondition.
-    unsafe { (self.vtable.write)(&mut self.data, buf) }
-}
+        // SAFETY: We keep the vtable and the value together to meet the precondition.
+        unsafe { (self.vtable.write)(&mut self.data, buf) }
+    }
 
     /// Close the given resource.
     pub fn close(&mut self) {
-    // SAFETY: We keep the vtable and the value together to meet the precondition.
-    unsafe { (self.vtable.close)(&mut self.data) }
-}
+        // SAFETY: We keep the vtable and the value together to meet the precondition.
+        unsafe { (self.vtable.close)(&mut self.data) }
+    }
 }
 impl Drop for ResourceDescription {
     fn drop(&mut self) {
@@ -110,6 +124,42 @@ impl RawResourceDescriptionVTable {
                 let data = unsafe { &mut data.file };
                 file_close(data);
             },
+        }
+    };
+
+    const CONSOLE_IN_VTABLE: Self = {
+        Self {
+            read: |_, buf| {
+                let c = loop {
+                    if let Ok(Some(c)) = crate::sbi::getchar() {
+                        // TODO log the error
+                        break c;
+                    }
+                };
+                let c_ser = c.get().encode_utf8(buf);
+                Ok(c_ser.len())
+            },
+            write: |_, _| {
+                panic!("Write to console in not permitted");
+            },
+            close: |_| {},
+        }
+    };
+
+    const CONSOLE_OUT_VTABLE: Self = {
+        Self {
+            read: |_, _| {
+                panic!("Read from console out not permitted");
+            },
+            write: |_, buf| {
+                use core::fmt::Write as _;
+                let s = str::from_utf8(buf).expect("TODO Write non-utf8");
+                crate::sbi::SbiPutcharWriter
+                    .write_str(s)
+                    .map_err(|core::fmt::Error| shared::ErrorKind::Io)?;
+                Ok(s.len())
+            },
+            close: |_| {},
         }
     };
 }

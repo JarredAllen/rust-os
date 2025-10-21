@@ -1,4 +1,7 @@
-use core::sync::atomic::{AtomicU32, AtomicUsize};
+use core::{
+    mem::MaybeUninit,
+    sync::atomic::{AtomicU32, AtomicUsize},
+};
 
 use shared::ErrorKind;
 use util::cell::SyncUnsafeCell;
@@ -120,15 +123,29 @@ impl ProcessInner {
                 USER_PAGE_FLAGS,
             )
         }?;
-        let resource_descriptors = crate::alloc::alloc_pages(
-            (MAX_NUM_RESOURCE_DESCRIPTORS * size_of::<Option<ResourceDescriptor>>())
-                .div_ceil(PAGE_SIZE),
-        )?
-        .cast::<[Option<ResourceDescriptor>; MAX_NUM_RESOURCE_DESCRIPTORS]>();
-        // SAFETY: We just allocated the memory, so we can write to it.
-        unsafe {
+        // SAFETY:
+        // We just allocated the memory, so we can write to it (though it might not yet be
+        // initialied).
+        let resource_descriptors = unsafe {
+            &mut *crate::alloc::alloc_pages(
+                (MAX_NUM_RESOURCE_DESCRIPTORS * size_of::<Option<ResourceDescriptor>>())
+                    .div_ceil(PAGE_SIZE),
+            )?
+            .cast::<MaybeUninit<[Option<ResourceDescriptor>; MAX_NUM_RESOURCE_DESCRIPTORS]>>()
+        };
+        let resource_descriptors =
             resource_descriptors.write([const { None }; MAX_NUM_RESOURCE_DESCRIPTORS]);
-        }
+        // Give the process stdin, stdout, and stderr
+        let [stdin, stdout, stderr] =
+        // SAFETY: These indices are disjoint.
+            unsafe { resource_descriptors.get_disjoint_unchecked_mut([0, 1, 2]) };
+        *stdin = Some(ResourceDescriptor::new(
+            ResourceDescription::for_console_in(),
+        )?);
+        *stdout = Some(ResourceDescriptor::new(
+            ResourceDescription::for_console_out(),
+        )?);
+        stderr.clone_from(stdout);
         Ok(Self {
             // TODO Don't collide with pre-existing processes if it wraps.
             pid: PID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
@@ -150,7 +167,12 @@ unsafe impl Sync for ProcessInner {}
 pub(crate) const MAX_NUM_RESOURCE_DESCRIPTORS: usize = 1024;
 
 /// A resource descriptor that a process might have.
+///
+/// Note that a [`ResourceDescriptor`] is a reference-counted shared pointer to a
+/// [`ResourceDescription`], and `.clone()`ing results in a duplicate descriptor pointing to the
+/// same in-kernel description.
 #[repr(transparent)]
+#[derive(Clone)]
 pub struct ResourceDescriptor {
     /// The inner description.
     description: KrcBox<KSpinLock<ResourceDescription>>,

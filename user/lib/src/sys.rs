@@ -7,30 +7,18 @@ use core::ptr::NonNull;
 
 pub use shared::Syscall;
 
-/// Write a char to the console.
-pub fn putchar(c: char) {
-    // SAFETY: This matches the definition of this syscall.
-    _ = unsafe { syscall(Syscall::PutChar as u32, [c as u32, 0, 0]) };
-}
-
-/// Write a whole string to the console.
-pub fn putstr(s: &str) {
-    for c in s.chars() {
-        putchar(c);
-    }
-}
-
 /// Read a character from the console.
-#[must_use]
-pub fn getchar() -> char {
-    // SAFETY: This matches the definition of this syscall.
-    let (ret, ret_err) = unsafe { syscall(Syscall::GetChar as u32, [0; 3]) };
-    if ret == 0 {
-        panic!("Hit error: {}", ret_err.unwrap());
-    } else {
-        // SAFETY: Kernel promises this will be a char.
-        unsafe { char::from_u32_unchecked(ret) }
+pub fn getchar() -> Result<char, shared::ErrorKind> {
+    // NOTE: This disallows most non-ASCII characters from being read.
+    let mut buf = 0_u8;
+    loop {
+        let len = read(0, core::slice::from_mut(&mut buf))?;
+        if len > 0 {
+            debug_assert_eq!(len, 1);
+            break;
+        }
     }
+    Ok(buf.into())
 }
 
 /// Get the PID of the currently-active process.
