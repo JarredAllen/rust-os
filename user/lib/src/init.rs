@@ -46,9 +46,9 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write as _;
     // SAFETY:
     // This panic handler will never return to outside code, so it is safe to take ownership over
-    // the stdout stream.
-    let mut stdout = unsafe { crate::io::Stdout::force_lock() };
-    _ = writeln!(stdout, "\n{info}");
+    // the stderr stream.
+    let mut stderr = unsafe { crate::io::Stderr::force_lock() };
+    _ = writeln!(stderr, "\n{info}");
     crate::sys::exit(1);
 }
 
