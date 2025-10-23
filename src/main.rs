@@ -52,16 +52,20 @@ extern "C" fn kernel_main() -> ! {
     logger::init_logger(log::LevelFilter::Info);
 
     // SAFETY: We take ownership over this device.
+    let console = unsafe { virtio::VirtioConsole::init_kernel_address() }
+        .expect("Failed to create console driver");
+    *DEVICE_TREE.console.lock() = Some(console);
+
+    // SAFETY: We take ownership over this device.
     let storage = unsafe { virtio::VirtioBlock::init_kernel_address() }
         .expect("Failed to create storage driver");
     let fs = ext2::Ext2::new(storage).expect("Failed to initialize filesystem");
+    *DEVICE_TREE.storage.lock() = Some(fs);
 
     // SAFETY: We take ownership over this device.
     let rng = unsafe { virtio::VirtioRandom::init_kernel_address() }
         .expect("Failed to create RNG driver");
-
     *DEVICE_TREE.random.lock() = Some(rng);
-    *DEVICE_TREE.storage.lock() = Some(fs);
 
     let mut user_proc =
         proc::Process::create_process(USER_PROC).expect("Failed to init user process");
@@ -86,12 +90,14 @@ extern "C" fn kernel_main() -> ! {
 struct DeviceTree {
     random: sync::KSpinLock<Option<virtio::VirtioRandom<'static>>>,
     storage: sync::KSpinLock<Option<ext2::Ext2<'static>>>,
+    console: sync::KSpinLock<Option<virtio::VirtioConsole<'static>>>,
 }
 impl DeviceTree {
     pub const fn new() -> Self {
         Self {
             random: sync::KSpinLock::new(None),
             storage: sync::KSpinLock::new(None),
+            console: sync::KSpinLock::new(None),
         }
     }
 }

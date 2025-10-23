@@ -15,6 +15,9 @@ pub(crate) const BLOCK_DEVICE_ADDRESS: usize = 0x1000_1000;
 /// The address for the block device.
 pub(crate) const RNG_DEVICE_ADDRESS: usize = 0x1000_2000;
 
+/// The address for the block device.
+pub(crate) const CONSOLE_DEVICE_ADDRESS: usize = 0x1000_3000;
+
 /// A driver controlling a virtio block device.
 pub struct VirtioBlock<'a> {
     /// The underlying virtio implementation.
@@ -223,6 +226,42 @@ impl VirtioRandom<'_> {
             buf = buf.range_from(used.length as usize..);
             crate::proc::sched_yield();
         }
+    }
+}
+
+pub struct VirtioConsole<'a> {
+    virtio: Virtio<'a, 4>,
+}
+impl VirtioConsole<'_> {
+    /// Initialize at the address the device appears at in kernel memory.
+    ///
+    /// # Safety
+    /// This takes ownership over a device at the given address, so requires nothing else access
+    /// this memory.
+    pub unsafe fn init_kernel_address() -> Result<Self> {
+        log::info!("Initializing virtio console device");
+        // SAFETY: By method precondition, we can take ownership of this memory.
+        let mut virtio = unsafe {
+            Virtio::init_for_pointers(core::ptr::with_exposed_provenance_mut(
+                CONSOLE_DEVICE_ADDRESS,
+            ))
+        };
+        if virtio.read_register(reg::DeviceId) != 3 {
+            // It wasn't a console device we know about.
+            return Err(ErrorKind::Unsupported.into());
+        }
+        // We need 4 different queues.
+        for queue_idx in 0..4 {
+            // SAFETY: Newly-allocated memory can get exclusive access.
+            let queue = unsafe {
+                &mut *crate::alloc::alloc_pages_zeroed(
+                    size_of::<VirtQueue>().div_ceil(crate::page_table::PAGE_SIZE),
+                )?
+                .cast::<MaybeUninit<VirtQueue>>()
+            };
+            virtio.initialize_queue(queue_idx, queue);
+        }
+        Ok(Self { virtio })
     }
 }
 

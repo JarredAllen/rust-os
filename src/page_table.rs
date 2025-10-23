@@ -150,6 +150,16 @@ pub unsafe fn map_kernel_memory(table: NonNull<PageTable>) -> Result<(), OutOfMe
             PageTableFlags::READABLE.bit_or(PageTableFlags::WRITABLE),
         )
     }?;
+    // Map the virtio network device
+    // SAFETY: Outer method preconditions match inner method's.
+    unsafe {
+        map_page(
+            table,
+            core::ptr::with_exposed_provenance_mut(crate::virtio::CONSOLE_DEVICE_ADDRESS),
+            PhysicalAddress(crate::virtio::CONSOLE_DEVICE_ADDRESS),
+            PageTableFlags::READABLE.bit_or(PageTableFlags::WRITABLE),
+        )
+    }?;
     Ok(())
 }
 
