@@ -5,7 +5,8 @@ use core::{cell::UnsafeCell, mem::MaybeUninit};
 
 /// A wrapper for [`UnsafeCell`] which is also [`Sync`].
 ///
-/// This value is designed primarily for putting mutable values in static memory.
+/// This type is designed for putting mutable values in static memory, since the 2024 edition of
+/// Rust has soft-deprecated `static mut`s.
 #[repr(transparent)]
 pub struct SyncUnsafeCell<T: ?Sized> {
     /// The inner cell.
@@ -25,7 +26,10 @@ impl<T: ?Sized> SyncUnsafeCell<T> {
         unsafe { Self::new_unchecked(value) }
     }
 
-    /// Construct a new [`SyncUnsafeCell`].
+    /// Construct a new [`SyncUnsafeCell`] from a value which might not be thread-safe.
+    ///
+    /// If the type being stored is `Send + Sync`, consider [`Self::new`] instead, which is safe to
+    /// call because the type system ensures that the value can be shared or sent.
     ///
     /// # Safety
     /// This type can be used to share or send values between threads. For types which aren't
@@ -38,6 +42,39 @@ impl<T: ?Sized> SyncUnsafeCell<T> {
         Self {
             inner: UnsafeCell::new(value),
         }
+    }
+
+    /// Get an exclusive reference to a cell from an exclusive reference to the value.
+    ///
+    /// The resulting exclusive reference can be reborrowed as shared and then copied to different
+    /// locations, which can be useful for having a value which has temporarily-shared mutability.
+    ///
+    /// This constructor requires the value be `Send` and `Sync` because it can be used to share or
+    /// send values between threads. For values which aren't, see [`Self::from_mut_unchecked`].
+    pub const fn from_mut(value: &mut T) -> &mut Self
+    where
+        T: Sync + Send,
+    {
+        // SAFETY: We've checked that this value is `Send + Sync`.
+        unsafe { Self::from_mut_unchecked(value) }
+    }
+
+    /// Get an exclusive reference to a cell from an exclusive reference to the value.
+    ///
+    /// The resulting exclusive reference can be reborrowed as shared and then copied to different
+    /// locations, which can be useful for having a value which has temporarily-shared mutability.
+    ///
+    /// If the type being stored is `Send + Sync`, consider [`Self::from_mut`] instead, which is
+    /// safe to call because the type system ensures that the value can be shared or sent.
+    ///
+    /// # Safety
+    /// This type can be used to share or send values between threads. For types which aren't
+    /// `Send` and/or `Sync`, it's on you to ensure that this cell doesn't get used in such a way
+    /// that causes UB.
+    pub const unsafe fn from_mut_unchecked(value: &mut T) -> &mut Self {
+        let inner = UnsafeCell::from_mut(value);
+        // SAFETY: We're `repr(transparent)` so converting reference types is sound.
+        unsafe { &mut *(core::ptr::from_mut(inner) as *mut Self) }
     }
 
     /// Convert back into the original value.
@@ -78,9 +115,9 @@ impl<T: ?Sized> SyncUnsafeCell<T> {
 }
 
 // SAFETY: Safe construction only permits `Sync` values.
-unsafe impl<T> Sync for SyncUnsafeCell<T> {}
+unsafe impl<T: ?Sized> Sync for SyncUnsafeCell<T> {}
 // SAFETY: Safe construction only permits `Send` values.
-unsafe impl<T> Send for SyncUnsafeCell<T> {}
+unsafe impl<T: ?Sized> Send for SyncUnsafeCell<T> {}
 
 /// A locked value which can only be written to once.
 pub struct OnceLock<T> {
